@@ -26,6 +26,7 @@ from pathlib import Path
 # ---------------------------------------------------------------- configuración
 RAIZ = Path(__file__).resolve().parent
 CACHE = RAIZ / "cache"
+CONVERSACIONES = Path(os.environ.get("JARVIS_CONVERSACIONES", RAIZ / "conversaciones"))
 
 MODELO_CLAUDE = "claude-opus-5-5"  # el más capaz; "sonnet" responde algo antes y gasta menos
 MODELO_WHISPER = "small"
@@ -63,6 +64,8 @@ Forma de hablar: castellano de España, nunca español latino. Trata al usuario 
 
 En las tareas que requieran varios pasos o herramientas, cuéntale el proceso mientras trabajas: antes de cada paso importante di en una frase corta qué vas a hacer y, si descubres algo relevante, coméntalo. Al terminar, resume el resultado. En las preguntas sencillas responde directamente, sin narrar.
 
+Memoria: tus conversaciones anteriores con el usuario están en {CONVERSACIONES}, un archivo por sesión llamado AAAA-MM-DD_HHMMSS.md. Si te pide recordar una conversación o algo de lo que hablasteis, o lo menciona dando por hecho que lo sabes, búscalo ahí: por fecha en el nombre del archivo o por tema en el contenido, probando sinónimos y variantes porque son transcripciones con posibles errores. Lee solo lo necesario y cuéntalo en pocas frases. Si no lo encuentras, dilo con claridad: nunca te inventes un recuerdo. Fuera de eso, no consultes esa carpeta.
+
 Lo que recibes es la transcripción automática de su voz: puede tener errores, interpreta la intención razonable. Si no se entiende, pregunta en una frase corta.
 
 Entorno: Windows, carpeta de usuario {USUARIO}, escritorio en {ESCRITORIO}. Usa PowerShell para actuar en el equipo.
@@ -79,7 +82,11 @@ def _escritorio():
     return Path.home()
 
 
-SISTEMA = SISTEMA.replace("{USUARIO}", str(Path.home())).replace("{ESCRITORIO}", str(_escritorio()))
+SISTEMA = (
+    SISTEMA.replace("{USUARIO}", str(Path.home()))
+    .replace("{ESCRITORIO}", str(_escritorio()))
+    .replace("{CONVERSACIONES}", str(CONVERSACIONES))
+)
 
 # ---------------------------------------------------------------- GPU (antes de importar whisper)
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
@@ -99,6 +106,7 @@ from claude_agent_sdk.types import RateLimitEvent, ResultMessage, StreamEvent
 from faster_whisper import WhisperModel
 from piper import PiperVoice, SynthesisConfig
 
+from memoria import Memoria
 from permisos import clasificar
 from uso import Uso
 
@@ -401,6 +409,7 @@ class Jarvis:
         self.tramas_sin_senal = 0
         self.sin_senal_avisado = False
         self.uso = Uso(RAIZ / "uso.json")
+        self.memoria = Memoria(CONVERSACIONES)
         self.salir = asyncio.Event()
 
     # ---- Claude
@@ -482,7 +491,7 @@ class Jarvis:
                     self.ultima_voz = time.monotonic()
 
         aviso = asyncio.create_task(avisar())
-        avisos_uso = []
+        avisos_uso, respuesta = [], []
         ahora =datetime.datetime.now().strftime("%A %d/%m/%Y %H:%M")
         try:
             if self.cliente is None:
@@ -497,10 +506,12 @@ class Jarvis:
                         self.ultima_voz = time.monotonic()
                         buffer += ev["delta"]["text"]
                         frases, buffer = cortar_frases(buffer)
+                        respuesta += frases
                         for frase in frases:
                             self.voz.decir(frase)
                     elif ev.get("type") == "content_block_stop":
                         frases, buffer = cortar_frases(buffer, final=True)
+                        respuesta += frases
                         for frase in frases:
                             self.voz.decir(frase)
                 elif isinstance(msg, RateLimitEvent):
@@ -521,6 +532,10 @@ class Jarvis:
             await self.desconectar()  # se reconecta en la siguiente orden
             await self.voz.esperar()
         finally:
+            try:
+                self.memoria.guardar(orden, " ".join(respuesta))
+            except OSError as e:
+                log("memoria", f"No se pudo guardar: {e}")
             self.escucha_hasta = time.monotonic() + SEGUIMIENTO_TRAS_RESPUESTA
             self.tarea_consulta = None
 

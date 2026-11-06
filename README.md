@@ -30,6 +30,7 @@ flowchart LR
 | «Jarvis», «hola Jarvis», «Jarvis, ¿estás ahí?» | Responde al momento y te escucha unos segundos | No |
 | «Jarvis, ¿qué hora es?», «oye Jarvis, busca…» | Se lo pasa a Claude | Sí |
 | «Jarvis, ¿cuánto consumo llevo?» | Dice el porcentaje de sesión y semanal | No |
+| «Jarvis, recuerda lo que hablamos el martes», «… la conversación sobre X» | Busca en vuestras conversaciones anteriores | Sí, solo lo que lee |
 | «Jarvis, para» | Corta lo que esté haciendo | No |
 | «Jarvis, apágate» | Da el resumen de consumo y se cierra | No |
 
@@ -63,6 +64,7 @@ La primera vez descarga los modelos de voz y transcripción. Después arranca en
 | [`jarvis.py`](jarvis.py) | El programa: oído, voz, conexión con Claude y decisión de qué hacer con cada frase |
 | [`permisos.py`](permisos.py) | Decide qué se ejecuta directamente y qué pide confirmación |
 | [`uso.py`](uso.py) | Sigue el consumo del plan y genera los avisos |
+| [`memoria.py`](memoria.py) | Guarda cada conversación en un archivo con su fecha |
 | [`prueba.py`](prueba.py) | Pruebas de extremo a extremo sin micrófono ni altavoces |
 | `jarvis.bat` / `jarvis.ico` | Lanzador e icono para Windows |
 
@@ -106,6 +108,7 @@ Usa el plan de la cuenta con la que hayas iniciado Claude Code, y Opus gasta má
 - **Tu voz** se transcribe en tu PC y no sale de él. Se envía a Claude el texto de lo que le pides a Jarvis.
 - **Las respuestas** se generan en local con Piper. Con `--voz edge`, el texto se envía a Microsoft.
 - **El micrófono** se escucha continuamente mientras Jarvis esté abierto, pero el audio no se guarda.
+- **Las conversaciones** se guardan como texto sin cifrar en `conversaciones/`, en tu PC, y no se suben a GitHub. Para que olvide algo, borra el archivo. Solo se envía a Claude lo que lea al pedirle que recuerde.
 
 ## Pruebas
 

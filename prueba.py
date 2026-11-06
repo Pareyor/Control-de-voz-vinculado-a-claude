@@ -4,16 +4,22 @@ Genera frases con voz sintética, las baja de volumen para imitar a alguien habl
 bajo y las mete por el mismo camino que el micro real. Uso: python prueba.py [--rapida]
 """
 import asyncio
+import datetime
+import os
 import sys
 import tempfile
 import time
 from pathlib import Path
+
+# Las pruebas no deben mezclarse con las conversaciones reales.
+os.environ["JARVIS_CONVERSACIONES"] = tempfile.mkdtemp(prefix="jarvis_conversaciones_")
 
 import edge_tts
 import miniaudio
 import numpy as np
 
 import jarvis as J
+from memoria import Memoria
 from permisos import clasificar
 from uso import Uso
 
@@ -134,6 +140,22 @@ def pruebas_uso():
     comprobar("uso: al renovarse la sesión da el total anterior", len(a) == 1 and "anterior" in a[0] and "64" in a[0], str(a))
     a = u.actualizar(evento(0.12, 0.11, reinicio=2000))
     comprobar("uso: en la sesión nueva vuelve a avisar", len(a) == 1 and "10" in a[0], str(a))
+
+
+def pruebas_memoria():
+    carpeta = Path(tempfile.mkdtemp(prefix="jarvis_memoria_")) / "sub"
+    m = Memoria(carpeta)
+    comprobar("memoria: sin charla no crea nada", not carpeta.exists())
+    fecha = datetime.datetime(2026, 11, 3, 18, 30, 5)
+    m.guardar("¿Qué es un sinónimo?", "Una palabra equivalente, señor.", fecha)
+    m.guardar("Gracias", "", fecha)
+    archivos = list(carpeta.glob("*.md"))
+    comprobar("memoria: un archivo por sesión con su fecha", [a.name for a in archivos] == ["2026-11-03_183005.md"], str(archivos))
+    texto = archivos[0].read_text(encoding="utf-8")
+    comprobar("memoria: fecha legible en español", "martes 3 de noviembre de 2026" in texto, texto[:60])
+    comprobar("memoria: guarda los dos turnos", "¿Qué es un sinónimo?" in texto and "Una palabra equivalente" in texto and "(sin respuesta hablada)" in texto)
+    Memoria(carpeta).guardar("Otra sesión", "Vale.", fecha.replace(second=9))
+    comprobar("memoria: otra sesión, otro archivo", len(list(carpeta.glob("*.md"))) == 2)
 
 
 async def pruebas_senal():
@@ -309,6 +331,7 @@ if __name__ == "__main__":
     pruebas_texto()
     pruebas_permisos()
     pruebas_uso()
+    pruebas_memoria()
     asyncio.run(pruebas_senal())
     if "--rapida" not in sys.argv:
         asyncio.run(pruebas_completas())
