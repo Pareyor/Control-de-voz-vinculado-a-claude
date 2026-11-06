@@ -27,7 +27,7 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent
 CACHE = RAIZ / "cache"
 
-MODELO_CLAUDE = "sonnet"
+MODELO_CLAUDE = "claude-opus-5-5"  # el más capaz; "sonnet" responde algo antes y gasta menos
 MODELO_WHISPER = "small"
 
 MOTOR_VOZ = "piper"  # "piper": local, unos 0,07 s por frase. "edge": Microsoft, más natural, unos 1 s
@@ -47,10 +47,12 @@ FIN_DE_FRASE = 0.45  # segundos de silencio que cierran una frase
 SEGUIMIENTO_TRAS_LLAMADA = 8.0  # segundos para hablar sin repetir "Jarvis"
 SEGUIMIENTO_TRAS_RESPUESTA = 6.0
 ESPERA_CONFIRMACION = 12.0
-AVISO_ESPERA = 2.5  # si tarda más, dice "un momento"
+AVISO_ESPERA = 2.5  # si tarda más en empezar, dice que lo está planteando
+AVISO_SIGUE = 12.0  # si se queda callado este tiempo en mitad de una tarea, avisa de que sigue
 
 RESP_LLAMADA = ["A su servicio, señor.", "Dígame, señor.", "Aquí estoy, señor.", "Le escucho, señor."]
-RESP_ESPERA = "Un momento, señor."
+RESP_ESPERA = "Déjeme plantearlo, señor."
+RESP_SIGUE = "Sigo en ello, señor."
 RESP_ERROR = "Disculpe, señor. He tenido un problema con esa petición."
 RESP_PARADO = "Como desee, señor."
 RESP_SALIR = "Hasta luego, señor."
@@ -58,6 +60,8 @@ RESP_SALIR = "Hasta luego, señor."
 SISTEMA = """Eres Jarvis, el asistente de voz del ordenador de tu usuario. Todo lo que escribas se leerá en voz alta.
 
 Forma de hablar: castellano de España, nunca español latino. Trata al usuario de usted y llámale "señor". Tono sereno, elegante y con un punto de ironía británica. Sé muy breve: una o dos frases salvo que pida detalle. Sin markdown, listas, emojis ni URLs; escribe solo lo que suene natural dicho en voz alta. Di cuando sea útil qué has hecho, nunca lo que no has hecho.
+
+En las tareas que requieran varios pasos o herramientas, cuéntale el proceso mientras trabajas: antes de cada paso importante di en una frase corta qué vas a hacer y, si descubres algo relevante, coméntalo. Al terminar, resume el resultado. En las preguntas sencillas responde directamente, sin narrar.
 
 Lo que recibes es la transcripción automática de su voz: puede tener errores, interpreta la intención razonable. Si no se entiende, pregunta en una frase corta.
 
@@ -392,7 +396,8 @@ class Jarvis:
         self.tarea_consulta = None
         self.confirmacion = None
         self.escucha_hasta = 0.0
-        self.aviso_espera = None
+        self.pidiendo_confirmacion = False
+        self.ultima_voz = 0.0
         self.tramas_sin_senal = 0
         self.sin_senal_avisado = False
         self.uso = Uso(RAIZ / "uso.json")
@@ -428,13 +433,17 @@ class Jarvis:
         log("permiso", f"{herramienta} {str(datos)[:160]} -> {'CONFIRMAR: ' + motivo if motivo else 'ok'}")
         if motivo is None:
             return PermissionResultAllow()
-        if await self._pedir_confirmacion(motivo):
+        self.pidiendo_confirmacion = True
+        try:
+            confirmado = await self._pedir_confirmacion(motivo)
+        finally:
+            self.pidiendo_confirmacion = False
+            self.ultima_voz = time.monotonic()
+        if confirmado:
             return PermissionResultAllow()
         return PermissionResultDeny(message="El usuario ha rechazado esta acción o no ha respondido. No la intentes de otra forma.")
 
     async def _pedir_confirmacion(self, motivo):
-        if self.aviso_espera:
-            self.aviso_espera.cancel()
         self.voz.decir(f"Necesito su visto bueno, señor: {motivo}. ¿Lo confirma?")
         for intento in range(2):
             await self.voz.esperar()
@@ -459,10 +468,20 @@ class Jarvis:
         buffer = ""
 
         async def avisar():
+            """Evita los silencios largos: nunca interrumpe una pregunta de confirmación."""
             await asyncio.sleep(AVISO_ESPERA)
-            self.voz.decir(RESP_ESPERA)
+            if primera is None and not self.pidiendo_confirmacion:
+                self.voz.decir(RESP_ESPERA)
+            self.ultima_voz = time.monotonic()
+            while True:
+                await asyncio.sleep(1)
+                if self.pidiendo_confirmacion or self.voz.hablando:
+                    self.ultima_voz = time.monotonic()
+                elif time.monotonic() - self.ultima_voz >= AVISO_SIGUE:
+                    self.voz.decir(RESP_SIGUE)
+                    self.ultima_voz = time.monotonic()
 
-        aviso = self.aviso_espera = asyncio.create_task(avisar())
+        aviso = asyncio.create_task(avisar())
         avisos_uso = []
         ahora =datetime.datetime.now().strftime("%A %d/%m/%Y %H:%M")
         try:
@@ -475,7 +494,7 @@ class Jarvis:
                     if ev.get("type") == "content_block_delta" and ev["delta"].get("type") == "text_delta":
                         if primera is None:
                             primera = time.monotonic() - t0
-                            aviso.cancel()
+                        self.ultima_voz = time.monotonic()
                         buffer += ev["delta"]["text"]
                         frases, buffer = cortar_frases(buffer)
                         for frase in frases:
@@ -618,7 +637,7 @@ class Jarvis:
 async def preparar(sin_sonido=False, sin_silenciar=False, motor=MOTOR_VOZ):
     t0 = time.monotonic()
     voz = Voz(sin_sonido=sin_sonido, motor=motor)
-    await voz.precargar(RESP_LLAMADA + [RESP_ESPERA, RESP_ERROR, RESP_PARADO, RESP_SALIR])
+    await voz.precargar(RESP_LLAMADA + [RESP_ESPERA, RESP_SIGUE, RESP_ERROR, RESP_PARADO, RESP_SALIR])
     transcriptor = await asyncio.to_thread(Transcriptor)
     log("inicio", f"Whisper en {transcriptor.dispositivo}")
     jarvis = Jarvis(voz, transcriptor, sin_silenciar=sin_silenciar)

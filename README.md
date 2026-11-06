@@ -90,14 +90,16 @@ Medida desde que dejas de hablar hasta que suena la respuesta, con voz simulada:
 | Tipo de orden | Tiempo |
 |---|---|
 | Respuestas sin Claude («¿estás ahí?») | unos 0,75 s |
-| Pregunta normal | unos 2,3 s |
-| Tarea que usa herramientas | más, y avisa con «Un momento, señor» |
+| Pregunta normal | unos 2,1 s |
+| Tarea compleja | más, pero te cuenta el proceso mientras trabaja |
 
-Reparto aproximado de una pregunta normal: 0,45 s esperando a que termines de hablar, 0,3 s de transcripción en GPU (GTX 1650), de 0,7 a 1 s hasta las primeras palabras de Claude y 0,07 s de voz. Claude se mantiene en un proceso abierto para no pagar 2,3 s de arranque en cada orden.
+Reparto aproximado de una pregunta normal: 0,45 s esperando a que termines de hablar, 0,3 s de transcripción en GPU (GTX 1650), de 0,5 a 0,7 s hasta las primeras palabras de Claude y 0,07 s de voz. Claude se mantiene en un proceso abierto para no pagar 2,3 s de arranque en cada orden.
+
+Usa Claude Opus 5.5 (`MODELO_CLAUDE` en `jarvis.py`), el modelo más capaz, porque está pensado también para tareas complejas. En esas tareas dice qué va a hacer antes de cada paso y, si se queda callado 12 segundos, avisa de que sigue trabajando.
 
 ## Consumo
 
-Usa el plan de la cuenta con la que hayas iniciado Claude Code. Jarvis avisa cada 10 % de uso de la sesión (ventana de 5 horas) y del semanal, y da un resumen al cerrarse. Los porcentajes son los que envía Claude Code, no estimaciones, aunque solo se actualizan cuando Jarvis hace una consulta.
+Usa el plan de la cuenta con la que hayas iniciado Claude Code, y Opus gasta más que Sonnet. Jarvis avisa cada 10 % de uso de la sesión (ventana de 5 horas) y del semanal, y da un resumen al cerrarse. Los porcentajes son los que envía Claude Code, no estimaciones, aunque solo se actualizan cuando Jarvis hace una consulta.
 
 ## Privacidad
 

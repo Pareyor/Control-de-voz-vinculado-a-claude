@@ -47,6 +47,20 @@ def pruebas_permisos():
         ("PowerShell", {"command": "Start-Process notepad"}), ("PowerShell", {"command": "start https://google.com"}),
         ("Write", {"file_path": str(Path(tempfile.gettempdir()) / "no_existe_jarvis.txt")}),
         ("mcp__claude_ai_Gmail__search_threads", {}),
+        # Tareas complejas de solo lectura.
+        ("PowerShell", {"command": 'Get-ChildItem C:\\x -Filter *.py | ForEach-Object { "$($_.Name): $((Get-Content $_.FullName).Count)" }'}),
+        ("PowerShell", {"command": "Get-ChildItem -Recurse *.py | Measure-Object"}),
+        ("PowerShell", {"command": "$f = Get-Content a.txt; $f.Count"}),
+        ("PowerShell", {"command": "Get-Process 2>$null | Select-Object -First 3"}),
+        ("PowerShell", {"command": "Get-Date\nGet-Process"}),
+        ("PowerShell", {"command": "Get-Content app.js"}),
+        ("PowerShell", {"command": "Get-ChildItem | Where-Object { $_.Name -like 'a-b*' }"}),
+        ("PowerShell", {"command": "foreach ($f in Get-ChildItem) { $f.Name.ToUpper() }"}),
+        ("PowerShell", {"command": "[math]::Round((Get-Item a).Length / 1MB, 2)"}),
+        ("PowerShell", {"command": "Select-String -Path *.py -Pattern 'a|b;c'"}),
+        ("PowerShell", {"command": "Start-Process notepad.exe"}),
+        ("PowerShell", {"command": "Get-ChildItem *.py | ForEach-Object { [PSCustomObject]@{ Nombre = $_.Name; Lineas = (Get-Content -LiteralPath $_.FullName).Count } } | Sort-Object Lineas"}),
+        ("PowerShell", {"command": "Get-ChildItem | Select-Object Name, @{N='KB';E={$_.Length / 1KB}}"}),
     ]
     a_confirmar = [
         ("Bash", {"command": "rm -rf ~/x"}), ("PowerShell", {"command": "Remove-Item C:\\x -Recurse"}),
@@ -60,6 +74,35 @@ def pruebas_permisos():
         ("PowerShell", {"command": "python -c 'x'"}), ("Edit", {"file_path": "a.txt"}),
         ("Write", {"file_path": __file__}), ("mcp__claude_ai_Gmail__send_message", {}),
         ("mcp__claude_ai_Google_Drive__trash_file", {}), ("HerramientaRara", {}),
+        # Borrados y ejecuciones camuflados dentro de comandos de aspecto inofensivo.
+        ("PowerShell", {"command": "Get-ChildItem | ForEach-Object { $_.Delete() }"}),
+        ("PowerShell", {"command": "(Get-Item x).Delete()"}),
+        ("PowerShell", {"command": "$c = 'rm'; & $c x"}),
+        ("PowerShell", {"command": "$x = Remove-Item y"}),
+        ("PowerShell", {"command": "$x = rm y"}),
+        ("PowerShell", {"command": "[IO.File]::Delete('x')"}),
+        ("PowerShell", {"command": "${C:\\x} = 'y'"}),
+        ("PowerShell", {"command": "$env:PATH = 'x'"}),
+        ("PowerShell", {"command": "foreach ($f in Remove-Item x) { }"}),
+        ("PowerShell", {"command": 'Write-Output "$(Remove-Item x)"'}),
+        ("PowerShell", {"command": "Get-Date | Out-File a"}),
+        ("PowerShell", {"command": "Get-Content a | Set-Content b"}),
+        ("PowerShell", {"command": "Start-Process 'powershell'"}),
+        ("PowerShell", {"command": 'Start-Process ("pow" + "ershell")'}),
+        ("PowerShell", {"command": "$p = 'x'; start $p"}),
+        ("PowerShell", {"command": "Invoke-WebRequest http://x -Method Post"}),
+        ("PowerShell", {"command": "Get-Date; iex 'x'"}),
+        ("PowerShell", {"command": ". .\\x.ps1"}),
+        ("PowerShell", {"command": ".\\x.bat"}),
+        ("PowerShell", {"command": "C:\\malo\\notepad.exe"}),
+        ("PowerShell", {"command": "start C:\\malo\\virus.exe"}),
+        ("PowerShell", {"command": "Get-Date `; rm x"}),
+        ("PowerShell", {"command": "New-Object -ComObject WScript.Shell"}),
+        ("PowerShell", {"command": "ipconfig /release"}),
+        ("PowerShell", {"command": "@{a=1}; rm = x"}),
+        ("PowerShell", {"command": "Get-Date | Select-Object @{E={rm = x}}"}),
+        ("PowerShell", {"command": "@{a=Remove-Item x}"}),
+        ("PowerShell", {"command": "Get-Date | Select-Object @{E={Remove-Item x}}"}),
     ]
     for h, d in sin_preguntar:
         comprobar(f"permitir {h} {d}", clasificar(h, d) is None)
@@ -218,6 +261,13 @@ async def pruebas_completas():
     await decir(jv, "Jarvis, ¿qué número te he dicho?")
     await terminar(jv)
     comprobar("recuerda lo anterior", "37" in " ".join(jv.voz.dicho) or "treinta y siete" in " ".join(jv.voz.dicho).lower(), str(jv.voz.dicho))
+
+    # Tarea de varios pasos: debe contar el proceso, no solo dar el resultado.
+    jv.voz.dicho.clear()
+    await jv.atender(f"Jarvis, mira qué archivos py hay directamente en la carpeta {J.RAIZ}, sin entrar en subcarpetas, y dime cuál tiene más líneas y qué hace.")
+    await terminar(jv)
+    comprobar("tarea compleja cuenta el proceso", len(jv.voz.dicho) >= 3, str(jv.voz.dicho))
+    comprobar("tarea de solo lectura no pide confirmación", not any("visto bueno" in f for f in jv.voz.dicho), str(jv.voz.dicho))
 
     # Acción delicada real sobre un archivo de usar y tirar.
     carpeta = Path(tempfile.mkdtemp(prefix="jarvis_prueba_"))

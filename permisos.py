@@ -10,48 +10,139 @@ import re
 # Herramientas que solo leen o no tocan nada fuera de la conversación.
 SIEMPRE_OK = {"Read", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite", "ToolSearch", "ListMcpResourcesTool", "ReadMcpResourceTool"}
 
-# Primeros comandos de shell que solo consultan información o abren algo.
+# Comandos de shell que solo consultan información, filtran resultados o abren algo.
 SHELL_OK = {
     "date", "dir", "echo", "hostname", "ipconfig", "ls", "nvidia-smi", "ping", "pwd", "systeminfo",
-    "tasklist", "tree", "type", "cat", "head", "tail", "wc", "where", "whoami", "ver", "which",
+    "tasklist", "tree", "type", "cat", "head", "tail", "wc", "where", "whoami", "ver", "which", "findstr",
     "explorer", "explorer.exe", "notepad", "notepad.exe", "calc", "calc.exe", "mspaint", "mspaint.exe",
     "start", "start-process", "saps", "invoke-item", "ii",
-    "select-object", "select", "where-object", "foreach-object", "sort-object", "sort", "measure-object",
-    "group-object", "format-table", "ft", "format-list", "fl", "out-string", "convertto-json",
-    "test-path", "resolve-path", "split-path", "join-path", "test-connection", "write-output",
+    "select-object", "select", "where-object", "?", "foreach-object", "%", "sort-object", "sort", "measure-object",
+    "group-object", "format-table", "ft", "format-list", "fl", "out-string", "out-null", "convertto-json",
+    "select-string", "sls", "test-path", "resolve-path", "split-path", "join-path", "test-connection",
+    "write-output", "write-host", "if", "else", "elseif", "foreach", "for", "while",
 }
+ABRIR = {"start", "start-process", "saps", "invoke-item", "ii"}
+EJECUTABLES_OK = {"explorer.exe", "notepad.exe", "calc.exe", "mspaint.exe"}
 
-# Nada de esto se lanza sin preguntar, aunque vaya dentro de un comando permitido.
-PELIGROSO = re.compile(
-    r"powershell|pwsh|\bcmd\b|cmd\.exe|\bbash\b|\bsh\b|wscript|cscript|mshta|rundll32|regsvr32|"
-    r"\bpython\w*\b|\bnode\b|\bpy\b|invoke-expression|\biex\b|-verb\s+runas|-encodedcommand|\s-enc\b|"
-    r"\.(bat|cmd|ps1|vbs|js|msi|exe|com|scr|reg)\b(?<!explorer\.exe)(?<!notepad\.exe)(?<!calc\.exe)(?<!mspaint\.exe)",
+# Intérpretes o elevación: nunca sin preguntar, aunque vayan dentro de un comando permitido.
+# El lookbehind evita confundir "*.py" o "C:\bash\x" con lanzar el programa.
+INTERPRETE = re.compile(
+    r"(?<![.\\/\w-])(powershell|pwsh|cmd|bash|sh|wscript|cscript|mshta|rundll32|regsvr32|python\w*|py|node|iex|invoke-expression)(\.exe)?\b"
+    r"|-verb\s+runas|-encodedcommand|\s-enc\b|\bipconfig\s+/(release|renew)|\bsort\b.*\s-o\b",
     re.I,
 )
-
-# Sin esto un comando "seguro" podría escribir en disco o colar otro comando.
-ESTRUCTURA_RIESGO = re.compile(r">|\$\(|`|\n|\bforeach-object\b.*\b(remove|set|stop|new|clear)-", re.I)
+EXTENSION_EJECUTABLE = re.compile(r"[\w-]+\.(bat|cmd|ps1|vbs|js|msi|exe|com|scr|reg)\b", re.I)
+REDIRECCION_INOFENSIVA = re.compile(r"\s*2>\s*(\$null|&1|nul)\b", re.I)
+SEPARADORES = re.compile(r"\|\||&&|[;|\n(){}=]")
+INICIO_EXPRESION = "$@[0123456789-,+*/!"
+VERBO_NOMBRE = re.compile(r"\b[a-z]+-[a-z]+\b", re.I)
+METODOS_OK = {"tostring", "trim", "trimend", "trimstart", "replace", "split", "substring", "tolower", "toupper", "contains", "startswith", "endswith", "indexof", "gettype", "join"}
+ESTATICOS_OK = {"math", "string", "datetime", "char", "int"}
 
 MCP_LECTURA = re.compile(r"(^|_)(get|list|read|search|query|find|tabs_context\w*)(_|$)", re.I)
 
 
-def _segmentos(cmd):
-    return [s.strip() for s in re.split(r"\|\||&&|[;|&]", cmd) if s.strip()]
+def _quitar_cadenas(cmd):
+    """Quita el texto literal: lo único ejecutable dentro de una cadena es $(...) en comillas dobles."""
+    salida = []
+    i = 0
+    while i < len(cmd):
+        c = cmd[i]
+        if c == "'":
+            fin = cmd.find("'", i + 1)
+            i = len(cmd) if fin < 0 else fin + 1
+            salida.append(" ")
+        elif c == '"':
+            i += 1
+            while i < len(cmd) and cmd[i] != '"':
+                if cmd.startswith("$(", i):
+                    nivel = 0
+                    inicio = i
+                    i += 1
+                    while i < len(cmd):
+                        nivel += (cmd[i] == "(") - (cmd[i] == ")")
+                        i += 1
+                        if nivel == 0:
+                            break
+                    salida.append(" " + cmd[inicio:i].replace('"', " ") + " ")
+                else:
+                    i += 1
+            i += 1
+        else:
+            salida.append(c)
+            i += 1
+    return "".join(salida)
 
 
-def _primer_comando(seg):
-    primero = seg.split()[0].strip("\"'").lower()
-    return primero.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+def _quitar_claves(cmd):
+    """En @{ Nombre = valor } la clave no es un comando. Solo se quita en el primer nivel:
+    dentro de un bloque { } anidado, "rm = x" sí ejecutaría rm."""
+    salida = []
+    i = 0
+    while i < len(cmd):
+        if not cmd.startswith("@{", i):
+            salida.append(cmd[i])
+            i += 1
+            continue
+        salida.append("@{ ")
+        i += 2
+        nivel = 1
+        inicio_valor = True  # justo tras "@{" o ";" de primer nivel es donde va una clave
+        while i < len(cmd) and nivel:
+            clave = re.match(r"\s*[a-z_]\w*\s*=(?!=)", cmd[i:], re.I) if inicio_valor and nivel == 1 else None
+            if clave:
+                i += clave.end()
+                inicio_valor = False
+                continue
+            c = cmd[i]
+            nivel += (c == "{") - (c == "}")
+            inicio_valor = c == ";" and nivel == 1
+            salida.append(c)
+            i += 1
+    return "".join(salida)
+
+
+def _comando_conocido(palabra):
+    palabra = palabra.lower()
+    return palabra in SHELL_OK or re.fullmatch(r"get-[a-z-]+", palabra) is not None
+
+
+def _segmento_seguro(seg):
+    # ".Count" tras un paréntesis lee una propiedad; ". x.ps1" y ".\x.bat" no entran aquí y se confirman.
+    if seg[0] in INICIO_EXPRESION or re.match(r"\.[a-z_]\w*(\s|$)", seg, re.I):
+        # Una expresión no puede esconder comandos: "$x in Remove-Item" o "$_ Remove-Item y".
+        if any(not _comando_conocido(m) for m in VERBO_NOMBRE.findall(seg)):
+            return False
+        destino = re.search(r"\bin\s+([^\s$]\S*)", seg, re.I)
+        return destino is None or _comando_conocido(destino.group(1))
+    return _comando_conocido(seg.split()[0])
 
 
 def shell_seguro(cmd):
     # Una URL no es un ejecutable (.com). No absorbe ; & | para no esconder un segundo comando.
-    cmd = re.sub(r"https?://[^\s;&|]+", "URL", cmd)
-    if ESTRUCTURA_RIESGO.search(cmd) or PELIGROSO.search(cmd):
+    cmd = REDIRECCION_INOFENSIVA.sub(" ", re.sub(r"https?://[^\s;&|]+", "URL", cmd))
+    if INTERPRETE.search(cmd):
         return False
-    for seg in _segmentos(cmd):
-        primero = _primer_comando(seg)
-        if primero not in SHELL_OK and not re.fullmatch(r"get-[a-z-]+", primero):
+
+    limpio = _quitar_claves(_quitar_cadenas(cmd))
+    if ">" in limpio or "`" in limpio or "${" in limpio or re.search(r"\$env:\w+\s*\+?=", limpio, re.I):
+        return False
+    if re.search(r"(?<!&)&(?!&)", limpio):  # operador de llamada: "& $x" ejecuta lo que sea
+        return False
+    if any(m.lower() not in METODOS_OK for m in re.findall(r"\.(\w+)\s*\(", limpio)):  # p. ej. $_.Delete()
+        return False
+    if any(m.lower() not in ESTATICOS_OK for m in re.findall(r"\[([\w.]+)\]\s*::", limpio)):  # p. ej. [IO.File]::Delete
+        return False
+
+    segmentos = [s.strip() for s in SEPARADORES.split(limpio) if s.strip()]
+    if not all(_segmento_seguro(s) for s in segmentos):
+        return False
+
+    # Abrir algo: el destino debe estar escrito tal cual y no ser un ejecutable desconocido.
+    if any(s.split()[0].lower() in ABRIR for s in segmentos if s[0] not in INICIO_EXPRESION):
+        if re.search(r"[$(+]", cmd):
+            return False
+        if any(m.group(0).lower() not in EJECUTABLES_OK for m in EXTENSION_EJECUTABLE.finditer(cmd)):
             return False
     return True
 
