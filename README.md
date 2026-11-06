@@ -35,6 +35,8 @@ flowchart LR
 | «Jarvis, pon música de Queen», «… pon The Killers en Spotify» | Busca en Spotify y reproduce el primer resultado | No |
 | «Jarvis, pon esa canción de los Killers que empieza con…» | Claude deduce cuál es y la reproduce | Sí |
 | «Jarvis, abre YouTube» | Cambia a la pestaña de Chrome que ya exista; si no hay ninguna, la abre | Sí |
+| «Jarvis, entra en el vídeo que se llama…» | Abre el vídeo en pantalla que mejor encaje, en la misma pestaña | No, salvo que dude |
+| «Jarvis, salta el anuncio» | Pulsa el botón de saltar de YouTube | No |
 | «Jarvis, recuerda lo que hablamos el martes», «… la conversación sobre X» | Busca en vuestras conversaciones anteriores | Sí, solo lo que lee |
 | «Jarvis, para» | Corta lo que esté haciendo | No |
 | «Jarvis, apágate» | Da el resumen de consumo y se cierra | No |

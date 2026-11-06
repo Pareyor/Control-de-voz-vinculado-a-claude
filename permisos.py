@@ -8,7 +8,7 @@ import os
 import re
 
 # Herramientas que solo leen o no tocan nada fuera de la conversación.
-SIEMPRE_OK = {"Read", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite", "ToolSearch", "ListMcpResourcesTool", "ReadMcpResourceTool", "mcp__jarvis__reproducir_en_spotify", "mcp__jarvis__abrir_web", "mcp__claude-in-chrome__navigate", "mcp__claude-in-chrome__tabs_create_mcp"}
+SIEMPRE_OK = {"Read", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite", "ToolSearch", "ListMcpResourcesTool", "ReadMcpResourceTool", "mcp__jarvis__reproducir_en_spotify", "mcp__jarvis__abrir_web", "mcp__jarvis__ver_videos_en_pantalla", "mcp__jarvis__entrar_en_video", "mcp__jarvis__saltar_anuncio","mcp__claude-in-chrome__navigate", "mcp__claude-in-chrome__tabs_create_mcp"}
 
 # Comandos de shell que solo consultan información, filtran resultados o abren algo.
 SHELL_OK = {

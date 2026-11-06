@@ -19,7 +19,7 @@ import miniaudio
 import numpy as np
 
 import jarvis as J
-from acciones import TECLA_PLAY_PAUSA, ejecutar, interpretar
+from acciones import TECLA_PLAY_PAUSA, ejecutar, elegir_video, interpretar
 from memoria import Memoria
 from permisos import clasificar
 from uso import Uso
@@ -340,6 +340,35 @@ class SistemaFalso:
         return self.suena
 
 
+def pruebas_videos():
+    videos = [
+        ("Me pasé Minecraft con 1 Vida", "u1"), ("Tienes Una Deuda de $100.000.000", "u2"), ("Abriendo COFRES CHAT | ONE PIECE COLAB", "u3"),
+        ("Instalé el Mod Más TURBIO de Minecraft (Verity)", "u4"), ("Visité el Server más VIEJO de Minecraft (2b2t)", "u5"),
+        ("Lo del token pirata es salvaje 0.001%", "u6"), ("MAGIK DESTROZA EN RANKED DE LA NUEVA TEMPORADA FORTNITE X ONE PIECE !", "u7"),
+    ]
+    aciertos = {
+        "me pase minecraft con una vida": "u1", "el del mod turbio de minecraft": "u4", "del rubius que dice lo del token pirata es salvaje": "u6",
+        "el servidor mas viejo de minecraft": "u5", "abriendo cofres chat": "u3", "me pasé minecraf con 1 bida": "u1",
+    }
+    for consulta, url in aciertos.items():
+        r = elegir_video(consulta, videos)
+        comprobar(f"vídeo {consulta!r}", r is not None and r[1] == url, str(r))
+    for consulta in ("me pase minecraft con el mod de suerte", "minecraft", "one piece", "receta de tortilla", "ese", ""):
+        comprobar(f"vídeo dudoso o ausente {consulta!r}: no se arriesga", elegir_video(consulta, videos) is None, str(elegir_video(consulta, videos)))
+    casos = {
+        "entra en el video que se llama me pase minecraft": ("video", "que se llama me pase minecraft"),
+        "quiero que entres en el video del rubius del token pirata": ("video", "del rubius del token pirata"),
+        "pon el video que tiene de titulo me pase minecraft": ("video", "que tiene de titulo me pase minecraft"),
+        "salta el anuncio": ("saltar", 10), "salta el anuncio porfa": ("saltar", 10), "dale a saltar de soltar el anuncio": ("saltar", 10), "quita el anuncio": ("saltar", 10), "saltar": ("saltar", 10),
+    }
+    for frase, esperado in casos.items():
+        comprobar(f"acción {frase!r}", interpretar(frase) == esperado, str(interpretar(frase)))
+    for frase in ("abre el bloc de notas", "abre youtube", "quita el fondo de la foto", "crea un anuncio para vender mi coche"):
+        comprobar(f"sigue hacia Claude {frase!r}", interpretar(frase) is None, str(interpretar(frase)))
+    for herramienta in ("ver_videos_en_pantalla", "entrar_en_video", "saltar_anuncio"):
+        comprobar(f"permisos: {herramienta} no pide confirmación", clasificar(f"mcp__jarvis__{herramienta}", {}) is None)
+
+
 async def pruebas_acciones():
     reconocidas = {
         "pon algo para estudiar": ("buscar", "estudiar"), "sube el volumen": ("subir", 10), "subele un poco": ("subir", 5), "sube mucho el volumen": ("subir", 20), "sube el volumen mucho": ("subir", 20), "sube un poco el volumen": ("subir", 5), "baja un poco la musica": ("bajar", 5),
@@ -559,6 +588,7 @@ if __name__ == "__main__":
     pruebas_memoria()
     asyncio.run(pruebas_senal())
     asyncio.run(pruebas_acciones())
+    pruebas_videos()
     asyncio.run(pruebas_peticiones_largas())
     if "--rapida" not in sys.argv:
         asyncio.run(pruebas_completas())

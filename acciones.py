@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import time
+import unicodedata
 from urllib.parse import quote, urlsplit
 
 TECLA_PLAY_PAUSA = 0xB3
@@ -34,13 +35,54 @@ FRASES = [
     ("reproducir", r"(?:pon|reproduce|reanuda|continua|sigue con|dale a)(?: la)? (?:musica|cancion)|reanuda|play"),
     ("siguiente", r"siguiente(?: cancion| tema)?|(?:pasa|cambia)(?: de)?(?: la| esta)? (?:cancion|tema)|otra cancion"),
     ("anterior", r"anterior(?: cancion| tema)?|(?:cancion|tema) anterior|(?:vuelve a|pon) la(?: cancion)? anterior"),
+    ("saltar", r".*\b(?:salta|saltar|saltate|omite|omitir|quita|quitar|pasa|pasar)\b.*\banuncios?\b.*|dale a saltar|saltar|salta"),
 ]
+ORDEN_VIDEO = re.compile(
+    r"(?:quiero que |puedes )?(?:entra|entres|entrar|abre|abras|abrir|pon|ponme|pongas|poner|reproduce|reproduzcas|dale|mete|metete|ve|vete)"
+    r"(?: a| en| al)?(?: el| ese| este| aquel)? (?:video|short) (.+)"
+)
+
+# Acción que no se ha podido resolver aquí: la decide Claude.
+PASAR_A_CLAUDE = object()
+
+PALABRAS_VACIAS = {
+    "video", "videos", "quiero", "que", "del", "los", "las", "una", "uno", "con", "por", "para", "pantalla", "estoy",
+    "viendo", "veo", "tengo", "ahi", "ese", "este", "llama", "titulo", "dice", "titulado", "tiene", "esta", "sobre", "porfa", "favor",
+}
+
+
+def _normalizar(texto):
+    sin_acentos = "".join(c for c in unicodedata.normalize("NFD", texto.lower()) if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^\w\s]", " ", sin_acentos)
+
+
+def _palabras(texto):
+    return [p for p in _normalizar(texto).split() if len(p) >= 3 and p not in PALABRAS_VACIAS]
+
+
+def elegir_video(consulta, videos):
+    """Devuelve el (título, url) que mejor encaja, tolerando errores de transcripción.
+    Si ninguno encaja bien o hay dos casi iguales, devuelve None en vez de arriesgarse."""
+    buscadas = _palabras(consulta)
+    if not buscadas:
+        return None
+    puntuados = []
+    for video in videos:
+        del_titulo = _palabras(video[0])
+        aciertos = sum(1 for p in buscadas if difflib.get_close_matches(p, del_titulo, n=1, cutoff=0.8))
+        puntuados.append((aciertos / len(buscadas), video))
+    puntuados.sort(key=lambda x: -x[0])
+    if not puntuados or puntuados[0][0] < 0.6:
+        return None
+    if len(puntuados) > 1 and puntuados[0][0] - puntuados[1][0] < 0.15:
+        return None
+    return puntuados[0][1]
 
 
 PARECIDAS = {
     "sube el volumen": "subir", "baja el volumen": "bajar", "silencia el sonido": "silenciar", "activa el sonido": "activar",
     "pon la musica": "reproducir", "pausa la musica": "pausa", "para la musica": "pausa",
-    "siguiente cancion": "siguiente", "cancion anterior": "anterior",
+    "siguiente cancion": "siguiente", "cancion anterior": "anterior", "salta el anuncio": "saltar",
 }
 
 
@@ -69,6 +111,10 @@ def interpretar(n):
         if re.fullmatch(patron, n):
             paso = 5 if "poco" in n or "poquito" in n else 20 if "mucho" in n else 10
             return accion, paso
+
+    m = ORDEN_VIDEO.fullmatch(n)
+    if m:
+        return "video", m.group(1)
 
     m = BUSQUEDA.fullmatch(n) or BUSQUEDA_SPOTIFY.fullmatch(n)
     if m:
@@ -144,6 +190,82 @@ class Sistema:
                     break
         self.abrir(url)
         return "La he abierto en una pestaña nueva."
+
+    def _ventana_youtube(self, ua):
+        """La ventana de Chrome con YouTube a la vista. Las pestañas de fondo no exponen su página."""
+        pids = self._pids("chrome.exe")
+        for v in ua.GetRootControl().GetChildren():
+            if v.ProcessId not in pids or v.ClassName != "Chrome_WidgetWin_1" or not v.Name:
+                continue
+            if "youtube" in v.Name.lower():
+                return v
+            pestana = self._buscar(v, lambda c: c.ControlTypeName == "TabItemControl" and "youtube" in (c.Name or "").lower(), limite=800, desde_el_final=True)
+            if pestana is not None:
+                v.SetActive()
+                pestana.GetSelectionItemPattern().Select()
+                time.sleep(0.6)
+                return v
+        return None
+
+    def videos_en_pantalla(self):
+        """Lista de (título, url) de los vídeos que hay en la página de YouTube."""
+        import uiautomation as ua
+
+        with ua.UIAutomationInitializerInThread():
+            ventana = self._ventana_youtube(ua)
+            if ventana is None:
+                return []
+            videos, vistos, pendientes, recorridos = [], set(), [ventana], 0
+            while pendientes and recorridos < 6000:
+                c = pendientes.pop()
+                recorridos += 1
+                if c.ControlTypeName == "HyperlinkControl" and c.Name:
+                    try:
+                        url = c.GetValuePattern().Value
+                    except Exception:
+                        url = ""
+                    if re.match(r"https://(www\.)?youtube\.com/(watch\?|shorts/)", url) and url not in vistos:
+                        vistos.add(url)
+                        videos.append((re.sub(r"\s+(\d+ (horas?|minutos?|segundos?)( y \d+ (minutos?|segundos?))?)$", "", c.Name), url))
+                pendientes.extend(reversed(c.GetChildren()))
+            return videos
+
+    def entrar_en_video(self, consulta):
+        """Abre en la misma pestaña el vídeo en pantalla que mejor encaje. Devuelve su título, o None."""
+        import uiautomation as ua
+
+        elegido = elegir_video(consulta, self.videos_en_pantalla())
+        if elegido is None:
+            return None
+        with ua.UIAutomationInitializerInThread():
+            ventana = self._ventana_youtube(ua)
+            if ventana is None:
+                return None
+            ventana.SetActive()
+            return elegido[0] if self._ir_a(ventana, elegido[1], ua) else None
+
+    def saltar_anuncio(self):
+        """Pulsa el botón de saltar del reproductor, esperando unos segundos a que aparezca."""
+        import uiautomation as ua
+
+        def es_saltar(c):
+            nombre = (c.Name or "").lower()
+            if c.ControlTypeName != "ButtonControl" or "naveg" in nombre or "navig" in nombre:  # "Saltar navegación" es otra cosa
+                return False
+            return re.fullmatch(r"(saltar|omitir|skip)( anuncios?| ads?)?", nombre.strip()) is not None
+
+        with ua.UIAutomationInitializerInThread():
+            ventana = self._ventana_youtube(ua)
+            if ventana is None:
+                return False
+            limite = time.monotonic() + 7
+            while time.monotonic() < limite:
+                boton = self._buscar(ventana, es_saltar, limite=6000)
+                if boton is not None:
+                    boton.GetInvokePattern().Invoke()
+                    return True
+                time.sleep(0.5)
+            return False
 
     def _ir_a(self, ventana, url, ua):
         """Escribe la dirección en la barra de Chrome. Devuelve False si no la encuentra."""
@@ -278,6 +400,13 @@ async def ejecutar(accion, dato, sistema, espera_arranque=3.0):
         await asyncio.sleep(espera_arranque)  # si se pulsa antes, Spotify no llega a recibir la tecla
         sistema.pulsar(TECLA_PLAY_PAUSA)
         return None
+    if accion == "video":
+        # Sin un claro ganador en pantalla, que lo resuelva Claude: puede buscarlo y comparar.
+        return None if await asyncio.to_thread(sistema.entrar_en_video, dato) else PASAR_A_CLAUDE
+    if accion == "saltar":
+        if await asyncio.to_thread(sistema.saltar_anuncio):
+            return None
+        return "No veo ningún botón de saltar, señor. Puede que este anuncio aún no se pueda omitir."
     if accion == "buscar":
         if await asyncio.to_thread(sistema.reproducir_en_spotify, dato):
             return None
