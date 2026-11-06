@@ -1,0 +1,11 @@
+# Entorno y modelos: pesan mucho y se regeneran (ver README)
+.venv/
+voces/
+cache/
+__pycache__/
+
+# Datos locales de cada equipo
+uso.json
+uso.tmp
+muestra_voz_*.wav
+*.log
