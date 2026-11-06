@@ -4,7 +4,7 @@ Asistente de voz para Windows, en castellano de España. Dices «Jarvis», le pi
 
 No usa un modelo local ni un asistente ya hecho: este programa solo pone el oído y la voz, y el cerebro es Claude Code con tu propia cuenta.
 
-> **Estado:** primera fase terminada y probada con voz simulada. Falta la prueba con un micrófono real. La segunda fase (control de programas, música y volumen) está pendiente.
+> **Estado:** funciona el circuito de voz, la memoria, el volumen y el control de música. Una canción concreta se deja buscada en Spotify, pero no empieza a sonar sola. «Pausa» y «pon música» envían la misma tecla, así que si ya estaba en ese estado hacen lo contrario.
 
 ## Cómo funciona
 
@@ -30,6 +30,9 @@ flowchart LR
 | «Jarvis», «hola Jarvis», «Jarvis, ¿estás ahí?» | Responde al momento y te escucha unos segundos | No |
 | «Jarvis, ¿qué hora es?», «oye Jarvis, busca…» | Se lo pasa a Claude | Sí |
 | «Jarvis, ¿cuánto consumo llevo?» | Dice el porcentaje de sesión y semanal | No |
+| «Jarvis, sube un poco el volumen», «… volumen al 40», «… silencia», «… activa el sonido» | Cambia el volumen de Windows | No |
+| «Jarvis, pon música», «… pausa», «… siguiente», «… canción anterior» | Controla la música con las teclas multimedia | No |
+| «Jarvis, pon música de Queen», «… pon The Killers en Spotify» | Abre la búsqueda en Spotify | No |
 | «Jarvis, recuerda lo que hablamos el martes», «… la conversación sobre X» | Busca en vuestras conversaciones anteriores | Sí, solo lo que lee |
 | «Jarvis, para» | Corta lo que esté haciendo | No |
 | «Jarvis, apágate» | Da el resumen de consumo y se cierra | No |
@@ -67,6 +70,7 @@ Para que arranque al iniciar sesión, crea un acceso directo a `jarvis.bat` en l
 | [`permisos.py`](permisos.py) | Decide qué se ejecuta directamente y qué pide confirmación |
 | [`uso.py`](uso.py) | Sigue el consumo del plan y genera los avisos |
 | [`memoria.py`](memoria.py) | Guarda cada conversación en un archivo con su fecha |
+| [`acciones.py`](acciones.py) | Música y volumen, resueltos sin pasar por Claude |
 | [`prueba.py`](prueba.py) | Pruebas de extremo a extremo sin micrófono ni altavoces |
 | `jarvis.bat` / `jarvis.ico` | Lanzador e icono para Windows |
 

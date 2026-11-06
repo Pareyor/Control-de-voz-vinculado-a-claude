@@ -19,6 +19,7 @@ import miniaudio
 import numpy as np
 
 import jarvis as J
+from acciones import TECLA_PLAY_PAUSA, ejecutar, interpretar
 from memoria import Memoria
 from permisos import clasificar
 from uso import Uso
@@ -65,6 +66,7 @@ def pruebas_permisos():
         ("PowerShell", {"command": "[math]::Round((Get-Item a).Length / 1MB, 2)"}),
         ("PowerShell", {"command": "Select-String -Path *.py -Pattern 'a|b;c'"}),
         ("PowerShell", {"command": "Start-Process notepad.exe"}),
+        ("PowerShell", {"command": 'Start-Process "spotify:search:the%20killers"'}),
         ("PowerShell", {"command": "Get-ChildItem *.py | ForEach-Object { [PSCustomObject]@{ Nombre = $_.Name; Lineas = (Get-Content -LiteralPath $_.FullName).Count } } | Sort-Object Lineas"}),
         ("PowerShell", {"command": "Get-ChildItem | Select-Object Name, @{N='KB';E={$_.Length / 1KB}}"}),
     ]
@@ -163,17 +165,94 @@ async def pruebas_senal():
     jv.uso = Uso(Path(tempfile.mkdtemp(prefix="jarvis_uso_")) / "uso.json")
     silencio = np.zeros(J.TRAMA, dtype=np.float32)
     voz_baja = silencio + 0.001
-    for _ in range(100):
+    for _ in range(3000):  # 90 s de silencio absoluto
         jv.vigilar_senal(silencio)
-    comprobar("micro: 3 s sin señal aún no avisa", not jv.voz.dicho)
-    for _ in range(100):
-        jv.vigilar_senal(silencio)
-    comprobar("micro: 6 s sin señal avisa una vez", len(jv.voz.dicho) == 1, str(jv.voz.dicho))
-    for _ in range(300):
-        jv.vigilar_senal(silencio)
-    comprobar("micro: no repite el aviso", len(jv.voz.dicho) == 1)
+    comprobar("micro: el silencio absoluto nunca se dice en voz alta", not jv.voz.dicho, str(jv.voz.dicho))
+    comprobar("micro: queda una nota en la ventana", jv.sin_senal_avisado)
     jv.vigilar_senal(voz_baja)
-    comprobar("micro: se rearma al volver la señal", not jv.sin_senal_avisado and jv.tramas_sin_senal == 0)
+    comprobar("micro: la señal reinicia la cuenta", jv.tramas_sin_senal == 0)
+    await jv.voz.esperar()
+
+
+class SistemaFalso:
+    """Registra lo que se haría, sin tocar el volumen ni la música reales."""
+
+    def __init__(self, volumen=50, abierto=True):
+        self.volumen = volumen
+        self.abierto = abierto
+        self.hecho = []
+
+    def leer_volumen(self):
+        return self.volumen
+
+    def fijar_volumen(self, porcentaje):
+        self.volumen = porcentaje
+
+    def silenciar(self, activo):
+        self.hecho.append(("silenciar", activo))
+
+    def pulsar(self, tecla):
+        self.hecho.append(("tecla", tecla))
+
+    def spotify_abierto(self):
+        return self.abierto
+
+    def abrir(self, uri):
+        self.hecho.append(("abrir", uri))
+        self.abierto = True
+
+
+async def pruebas_acciones():
+    reconocidas = {
+        "sube el volumen": ("subir", 10), "subele un poco": ("subir", 5), "sube mucho el volumen": ("subir", 20), "sube el volumen mucho": ("subir", 20), "sube un poco el volumen": ("subir", 5), "baja un poco la musica": ("bajar", 5),
+        "baja el volumen por favor": ("bajar", 10), "mas alto": ("subir", 10), "mas bajo": ("bajar", 10),
+        "pon el volumen al 40": ("fijar", 40), "volumen al 40 por ciento": ("fijar", 40), "baja el volumen a treinta": ("fijar", 30),
+        "pon el volumen al treinta y cinco": ("fijar", 35), "volumen 150": ("fijar", 100),
+        "silencia": ("silenciar", 10), "quita el sonido": ("silenciar", 10), "activa el sonido": ("activar", 10),
+        "que volumen hay": ("consultar", 10), "pausa": ("pausa", 10), "para la musica": ("pausa", 10),
+        "pon musica": ("reproducir", 10), "reanuda": ("reproducir", 10), "siguiente": ("siguiente", 10), "siguiente cancion": ("siguiente", 10),
+        "cambia de cancion": ("siguiente", 10), "cancion anterior": ("anterior", 10), "pon la anterior": ("anterior", 10),
+        "pon musica de queen": ("buscar", "queen"), "ponme la cancion bohemian rhapsody": ("buscar", "bohemian rhapsody"),
+        "pon the killers en spotify": ("buscar", "the killers"),
+    }
+    for frase, esperado in reconocidas.items():
+        if esperado is not None:
+            comprobar(f"acción {frase!r}", interpretar(frase) == esperado, str(interpretar(frase)))
+    # Estas deben seguir llegando a Claude.
+    for frase in ("sube el archivo a drive", "baja las notas de la web", "pon un temporizador de cinco minutos", "pon algo para estudiar", "para", "sigue", "continua", "que hora es", "pon el pc en suspension", "busca el tiempo de mañana"):
+        comprobar(f"sigue hacia Claude {frase!r}", interpretar(frase) is None, str(interpretar(frase)))
+
+    s = SistemaFalso()
+    comprobar("volumen: sube y lo dice", await ejecutar("subir", 10, s) == "Volumen al 60 por ciento, señor." and s.volumen == 60)
+    s = SistemaFalso(volumen=95)
+    await ejecutar("subir", 10, s)
+    comprobar("volumen: no pasa de 100", s.volumen == 100, str(s.volumen))
+    s = SistemaFalso(volumen=5)
+    await ejecutar("bajar", 10, s)
+    comprobar("volumen: no baja de 0", s.volumen == 0, str(s.volumen))
+    s = SistemaFalso()
+    frase = await ejecutar("silenciar", 10, s)
+    comprobar("silenciar: no habla porque estaría silenciado", frase is None and s.hecho == [("silenciar", True)])
+    s = SistemaFalso(abierto=True)
+    await ejecutar("reproducir", 10, s)
+    comprobar("música con Spotify abierto: solo pulsa", s.hecho == [("tecla", TECLA_PLAY_PAUSA)], str(s.hecho))
+    s = SistemaFalso(abierto=False)
+    await ejecutar("reproducir", 10, s, espera_arranque=0)
+    comprobar("música con Spotify cerrado: lo abre y pulsa", s.hecho == [("abrir", "spotify:"), ("tecla", TECLA_PLAY_PAUSA)], str(s.hecho))
+    s = SistemaFalso()
+    await ejecutar("buscar", "the killers", s)
+    comprobar("buscar: abre Spotify con la búsqueda", s.hecho == [("abrir", "spotify:search:the%20killers")], str(s.hecho))
+
+    # El camino completo, desde la frase hasta la acción, sin Claude ni tokens.
+    jv = J.Jarvis(J.Voz(sin_sonido=True), None)
+    jv.sistema = SistemaFalso()
+    await jv.atender("Jarvis, sube el volumen.")
+    comprobar("orden de volumen no pasa por Claude", jv.sistema.volumen == 60 and not jv.ocupado() and jv.cliente is None, str(jv.voz.dicho))
+    await jv.atender("Más alto.")
+    comprobar("seguimiento: «más alto» sin repetir Jarvis", jv.sistema.volumen == 70, str(jv.sistema.volumen))
+    jv.escucha_hasta = 0
+    await jv.atender("Siguiente canción.")
+    comprobar("sin Jarvis no cambia la canción", jv.sistema.hecho == [], str(jv.sistema.hecho))
     await jv.voz.esperar()
 
 
@@ -333,6 +412,7 @@ if __name__ == "__main__":
     pruebas_uso()
     pruebas_memoria()
     asyncio.run(pruebas_senal())
+    asyncio.run(pruebas_acciones())
     if "--rapida" not in sys.argv:
         asyncio.run(pruebas_completas())
     print(f"\n{'TODO OK' if not fallos else 'FALLOS: ' + str(fallos)}", flush=True)
