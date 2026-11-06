@@ -17,30 +17,36 @@ COMANDOS_DELICADOS = {
     "format", "format-volume", "diskpart", "clear-disk", "remove-partition", "initialize-disk", "cipher", "sdelete", "vssadmin", "dd", "shred",
     "shutdown", "stop-computer", "restart-computer", "logoff", "uninstall-package", "remove-appxpackage", "uninstall-module",
     "send-mailmessage",
+    "trash", "srm", "truncate", "halt", "reboot", "poweroff",  # macOS
 }
+
+# Delante de la orden real, sin cambiar lo que hace: "sudo rm x" sigue siendo borrar.
+PREFIJOS = {"sudo", "command", "builtin", "env", "nohup", "exec", "time", "xargs"}
 
 # Inconfundibles aunque vayan dentro de un script o de otra orden entre comillas.
 BORRADO_EN_CUALQUIER_SITIO = re.compile(
     r"remove-item|remove-itemproperty|clear-content|clear-recyclebin|format-volume|clear-disk|remove-partition|"
     r"os\.(remove|unlink|rmdir|removedirs)|shutil\.rmtree|\.unlink\s*\(|\brmtree\b|\.delete\s*\(|::\s*delete|invokeverb|"
     r"fs\.(unlink|rm|rmdir)|git\s+clean\b|git\s+reset\s+--hard|git\s+push\b[^;|&]*(--force|\s-f\b)|"
-    r"\b(winget|choco|pip|npm|msiexec)\b[^;|&]*\s(uninstall|remove|/x)\b|\breg(\.exe)?\s+delete\b|\bwmic\b[^;|&]*\bdelete\b|"
-    r"shutdown(\.exe)?\s+/|remove-appxpackage|send-mailmessage",
+    r"\b(winget|choco|pip|npm|msiexec|brew)\b[^;|&]*\s(uninstall|remove|rm|/x)\b|\breg(\.exe)?\s+delete\b|\bwmic\b[^;|&]*\bdelete\b|"
+    r"shutdown(\.exe)?\s+/|remove-appxpackage|send-mailmessage|"
+    r"\bfind\b[^;|&]*\s(-delete\b|-exec(dir)?\s+\S*rm\b)|\bdiskutil\s+(erase|reformat|partition|secureerase|apfs\s+delete)|"
+    r"\bosascript\b.*\b(delete|empty trash|send|shut down|restart|log out)\b",
     re.I,
 )
 
 # Cuando una orden lanza a otra, su contenido entre comillas también se ejecuta.
-LANZADOR = re.compile(r"(?<![.\\/\w-])(powershell|pwsh|cmd|bash|sh|wsl|start-process|saps|start)(\.exe)?\b", re.I)
+LANZADOR = re.compile(r"(?<![.\\/\w-])(powershell|pwsh|cmd|bash|zsh|sh|wsl|start-process|saps|start)(\.exe)?\b", re.I)
 BORRADO_CORTO = re.compile(r"(?<![\w.-])(rm|ri|del|erase|rd|rmdir|format)(?![\w.-])", re.I)
 
 # Lo que no se puede leer antes de ejecutarlo.
 OPACO = re.compile(
     r"-encodedcommand|\s-enc\b|\s-e\s+[a-z0-9+/=]{20,}|(?<![\w-])(iex|invoke-expression|mshta|regsvr32|rundll32)(?![\w-])|"
-    r"\|\s*(bash|sh|pwsh|powershell|cmd|python\w*|node)\b",
+    r"\|\s*(bash|zsh|sh|pwsh|powershell|cmd|python\w*|node)\b",
     re.I,
 )
 
-SEPARADORES = re.compile(r"\|\||&&|[;|\n(){}=]|%\s*\{")
+SEPARADORES = re.compile(r"\|\||&&|[;|\n(){}=`&]|%\s*\{")
 # Escribir un archivo entero: crear uno nuevo es normal; solo preocupa si ya existe.
 DESTINO_ESCRITURA = re.compile(
     r"""(?:(?<![\d>])>(?!>)|\b(?:set-content|out-file|tee-object)\b(?:\s+-(?:literal)?(?:file)?path)?)\s+["']?([^\s"'|;&$()]+)""",
@@ -88,9 +94,19 @@ def _machaca_archivo(cmd):
     Claude trabaja desde la carpeta de usuario, y con una variable no se puede saber el destino."""
     for m in DESTINO_ESCRITURA.finditer(cmd):
         destino = m.group(1)
-        if destino.lower() not in ("nul", "null") and not destino.startswith("-") and (Path.home() / destino).is_file():
+        if destino.lower() not in ("nul", "null") and not destino.startswith("-") and (Path.home() / Path(destino).expanduser()).is_file():
             return True
     return False
+
+
+def _orden_real(palabras):
+    """La orden que se ejecuta de verdad, sin prefijos como sudo ni la carpeta donde está."""
+    for i, palabra in enumerate(palabras):
+        palabra = palabra.strip("&").lower()
+        if palabra in PREFIJOS or (i > 0 and palabra.startswith("-")):
+            continue
+        return palabra.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].removesuffix(".exe")
+    return ""
 
 
 def shell_delicado(cmd):
@@ -108,8 +124,7 @@ def shell_delicado(cmd):
     if _machaca_archivo(cmd) or re.search(r"(?<!&)&\s*[$(]", limpio):  # "& $x" ejecuta lo que sea
         return True
     for segmento in SEPARADORES.split(limpio):
-        palabras = segmento.split()
-        if palabras and palabras[0].strip("&").lower().rsplit("\\", 1)[-1].removesuffix(".exe") in COMANDOS_DELICADOS:
+        if _orden_real(segmento.split()) in COMANDOS_DELICADOS:
             return True
     return False
 

@@ -8,6 +8,7 @@ __pycache__/
 conversaciones/
 uso.json
 uso.tmp
+.jarvis.lock
 muestra_voz_*.wav
 *.log
 @AutomationLog.txt

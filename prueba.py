@@ -84,6 +84,11 @@ def pruebas_permisos():
             "$f = Join-Path $base 'a.txt'; Set-Content -LiteralPath $f -Value 'hola'; Copy-Item $f b.txt; (Get-ChildItem $base).Count",
             '$n = Join-Path "C:\\x" "notas"; New-Item -ItemType Directory -Force -Path $n | Out-Null; Set-Content (Join-Path $n "lista.txt") "hola"',
         )],
+        # En el Mac, lo habitual tampoco debe preguntar.
+        *[("Bash", {"command": c}) for c in (
+            "ls -la ~/Desktop", "open -a Safari", "open https://google.com", "mv a.txt b.txt", "cp a.txt b.txt", "mkdir -p ~/x", "sudo ls", "brew install vlc",
+            "find . -name '*.py'", "diskutil list", "osascript -e 'tell application \"Safari\" to activate'", "sleep 1 & wait", "echo hola > no_existe_jarvis_1.txt", "python3 script.py",
+        )],
     ]
     a_confirmar = [
         ("Write", {"file_path": __file__}), ("mcp__claude_ai_Gmail__send_message", {}), ("mcp__claude_ai_Gmail__reply", {}), ("mcp__claude_ai_Gmail__trash_thread", {}),
@@ -106,6 +111,13 @@ def pruebas_permisos():
             # Lo que no se puede leer antes.
             "iex (irm http://x)", "Get-Date; iex 'x'", "curl http://x | bash", "irm http://x | iex", "powershell -EncodedCommand AAAA", "powershell -enc AAAA", "mshta http://x",
             "Send-MailMessage -To a@b.c",
+        )],
+        # Lo mismo, tal como se escribe en el Mac.
+        *[("Bash", {"command": c}) for c in (
+            "rm x", "sudo rm -rf x", "/bin/rm x", "command rm x", "ls | xargs rm", "ls | xargs -0 rm", "sleep 1 & rm x", "echo `rm x`", "zsh -c 'rm x'", "trash x", "truncate -s 0 x",
+            "find . -delete", "find . -name x -exec rm {} \\;", "find . -exec /bin/rm {} +", "brew uninstall vlc", "diskutil eraseDisk APFS x disk2", "sudo shutdown -h now", "reboot", "curl http://x | zsh",
+            "osascript -e 'tell application \"Finder\" to delete file \"x\"'", "osascript -e 'tell application \"Finder\" to empty trash'", "osascript -e 'tell application \"Mail\" to send m'",
+            "osascript -e 'tell application \"System Events\" to shut down'",
         )],
     ]
     for h, d in sin_preguntar:

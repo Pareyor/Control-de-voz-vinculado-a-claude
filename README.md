@@ -1,6 +1,6 @@
 # Jarvis: control por voz vinculado a Claude
 
-Asistente de voz para Windows, en castellano de España. Dices «Jarvis», le pides algo y **Claude Code** hace la tarea en tu PC y te responde en voz alta.
+Asistente de voz para Windows y macOS, en castellano de España. Dices «Jarvis», le pides algo y **Claude Code** hace la tarea en tu PC y te responde en voz alta.
 
 No usa un modelo local ni un asistente ya hecho: este programa solo pone el oído y la voz, y el cerebro es Claude Code con tu propia cuenta.
 
@@ -30,7 +30,7 @@ flowchart LR
 | «Jarvis», «hola Jarvis», «Jarvis, ¿estás ahí?» | Responde al momento y te escucha unos segundos | No |
 | «Jarvis, ¿qué hora es?», «oye Jarvis, busca…» | Se lo pasa a Claude | Sí |
 | «Jarvis, ¿cuánto consumo llevo?» | Dice el porcentaje de sesión y semanal | No |
-| «Jarvis, sube un poco el volumen», «… volumen al 40», «… silencia», «… activa el sonido» | Cambia el volumen de Windows | No |
+| «Jarvis, sube un poco el volumen», «… volumen al 40», «… silencia», «… activa el sonido» | Cambia el volumen del sistema | No |
 | «Jarvis, pon música», «… pausa», «… siguiente», «… canción anterior» | Controla la música con las teclas multimedia | No |
 | «Jarvis, pon música de Queen», «… pon The Killers en Spotify» | Busca en Spotify y reproduce el primer resultado | No |
 | «Jarvis, pon esa canción de los Killers que empieza con…» | Claude deduce cuál es y la reproduce | Sí |
@@ -47,7 +47,9 @@ Tras cada respuesta tienes 10 segundos para empezar a hablar sin repetir su nomb
 
 ## Instalación
 
-Necesitas Windows, Python 3.12, un micrófono y [Claude Code](https://claude.com/claude-code) con la sesión iniciada.
+Necesitas un micrófono y [Claude Code](https://claude.com/claude-code) con la sesión iniciada, además de Python 3.12 en Windows o Python 3.12 o superior en macOS.
+
+### Windows
 
 ```powershell
 git clone https://github.com/Pareyor/Control-de-voz-vinculado-a-claude.git jarvis
@@ -57,11 +59,32 @@ py -3.12 -m venv .venv
 .\jarvis.bat
 ```
 
-La primera vez descarga los modelos de voz y transcripción. Después arranca en unos 4 segundos.
+Para que arranque al iniciar sesión, crea un acceso directo a `jarvis.bat` en la carpeta que abre `shell:startup`.
 
-Para que arranque al iniciar sesión, crea un acceso directo a `jarvis.bat` en la carpeta que abre `shell:startup`. Solo puede haber una copia abierta: si ya está en marcha, las siguientes se cierran.
+### macOS
 
-| Opción de `jarvis.bat` | Para qué sirve |
+```zsh
+git clone https://github.com/Pareyor/Control-de-voz-vinculado-a-claude.git jarvis
+cd jarvis
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+./jarvis.command
+```
+
+También arranca con doble clic en `jarvis.command`, y para que lo haga al iniciar sesión, añádelo en Ajustes del Sistema, General, Ítems de inicio. La primera vez macOS pide dos permisos para la Terminal: el micrófono y controlar otras apps, como Chrome y Spotify.
+
+Hay algunas diferencias con Windows:
+
+- **Pausa y cambio de canción:** se le piden a Spotify o a Música, la que esté abierta. No afectan a un vídeo de YouTube, como sí hace la tecla multimedia en Windows.
+- **Vídeos y anuncios de YouTube:** requieren activar en Chrome Ver, Opciones para desarrolladores, Permitir JavaScript desde Eventos de Apple. Esta opción deja que las apps con permiso de automatización ejecuten código en tus pestañas. Sin ella, todo lo demás funciona.
+- **Poner una canción:** abre la búsqueda en Spotify y le pide reproducirla. Si no consigue que suene, lo dice y la deja buscada.
+- **Transcripción:** usa el modelo `small` en el procesador, porque faster-whisper no aprovecha la GPU de los Mac.
+
+### En los dos
+
+La primera vez descarga los modelos de voz y transcripción. Solo puede haber una copia abierta: si ya está en marcha, las siguientes se cierran.
+
+| Opción de `jarvis.bat` / `jarvis.command` | Para qué sirve |
 |---|---|
 | `--dispositivos` | Lista los micrófonos disponibles |
 | `--micro 3` | Usa un micrófono concreto |
@@ -77,8 +100,10 @@ Para que arranque al iniciar sesión, crea un acceso directo a `jarvis.bat` en l
 | [`uso.py`](uso.py) | Sigue el consumo del plan y genera los avisos |
 | [`memoria.py`](memoria.py) | Guarda cada conversación en un archivo con su fecha |
 | [`acciones.py`](acciones.py) | Música y volumen, resueltos sin pasar por Claude |
+| [`sistema_windows.py`](sistema_windows.py) / [`sistema_mac.py`](sistema_mac.py) | Lo que toca el equipo en cada sistema: volumen, Spotify y Chrome |
 | [`prueba.py`](prueba.py) | Pruebas de extremo a extremo sin micrófono ni altavoces |
 | `jarvis.bat` / `jarvis.ico` | Lanzador e icono para Windows |
+| `jarvis.command` | Lanzador para macOS |
 
 Lo que más se suele querer cambiar está al principio de `jarvis.py`: el modelo, la voz, los tiempos de espera, las respuestas fijas y la personalidad (`SISTEMA`).
 
@@ -107,7 +132,7 @@ Medida desde que dejas de hablar hasta que suena la respuesta, con voz simulada:
 | Pregunta normal | unos 2,5 s |
 | Tarea compleja | más, pero te cuenta el proceso mientras trabaja |
 
-Reparto aproximado de una pregunta normal: 0,45 s o más esperando a que termines de hablar, 0,8 s de transcripción con el modelo `medium` en GPU (GTX 1650), de 0,5 a 0,7 s hasta las primeras palabras de Claude y 0,07 s de voz. Se usa `medium` y no `small`, que tarda 0,5 s menos, porque comete muchos menos errores. Claude se mantiene en un proceso abierto para no pagar 2,3 s de arranque en cada orden.
+Reparto aproximado de una pregunta normal: 0,45 s o más esperando a que termines de hablar, 0,8 s de transcripción con el modelo `medium` en GPU (GTX 1650), de 0,5 a 0,7 s hasta las primeras palabras de Claude y 0,07 s de voz. Se usa `medium` y no `small`, que tarda 0,5 s menos, porque comete muchos menos errores. Claude se mantiene en un proceso abierto para no pagar 2,3 s de arranque en cada orden. En un Mac con M4, la transcripción con `small` tarda unos 0,9 s.
 
 Usa Claude Opus 5.5 (`MODELO_CLAUDE` en `jarvis.py`), el modelo más capaz, porque está pensado también para tareas complejas. En esas tareas dice qué va a hacer antes de cada paso y, si se queda callado 12 segundos, avisa de que sigue trabajando.
 
@@ -128,6 +153,8 @@ Usa el plan de la cuenta con la que hayas iniciado Claude Code, y Opus gasta má
 .\.venv\Scripts\python.exe prueba.py --rapida   # lógica, sin red ni tokens de Claude
 .\.venv\Scripts\python.exe prueba.py            # completa: gasta algo de tu plan
 ```
+
+En macOS, lo mismo con `.venv/bin/python prueba.py`.
 
 La prueba completa genera frases con voz sintética, las baja de volumen para simular a alguien hablando bajo y las pasa por el mismo camino que el micro real. Con un archivo temporal, comprueba además que un «no» impide borrarlo y un «sí» lo permite.
 

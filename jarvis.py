@@ -24,12 +24,13 @@ import urllib.request
 from pathlib import Path
 
 # ---------------------------------------------------------------- configuración
+ES_WINDOWS = sys.platform == "win32"
 RAIZ = Path(__file__).resolve().parent
 CACHE = RAIZ / "cache"
 CONVERSACIONES = Path(os.environ.get("JARVIS_CONVERSACIONES", RAIZ / "conversaciones"))
 
 MODELO_CLAUDE = "claude-opus-5-5"  # el más capaz; "sonnet" responde algo antes y gasta menos
-MODELO_WHISPER = "medium"
+MODELO_WHISPER = "medium" if ES_WINDOWS else "small"  # sin GPU, en un M4 "medium" tarda 2,7 s y "small" 0,9 s
 # Palabras sueltas, no órdenes: con frases completas Whisper las copia cuando oye mal y se inventa peticiones.
 PISTA_WHISPER = "Jarvis, Spotify, volumen, canción, bloc de notas, escritorio, archivo, correo."
 
@@ -74,7 +75,7 @@ Memoria: tus conversaciones anteriores con el usuario están en {CONVERSACIONES}
 
 Lo que recibes es la transcripción automática de su voz, y a menudo tiene errores: palabras cambiadas por otras que suenan parecido, frases cortadas o signos mal puestos. Deduce qué quiso decir por cómo suena, por el contexto de la conversación y por lo que suele pedirte; por ejemplo, "abre el blog de notas" es el bloc de notas y "ponde Killers" es poner a The Killers. No le señales los errores ni le corrijas. Si la acción es inofensiva, actúa según lo más probable y, si no estabas seguro, di de pasada qué has entendido. Pregunta en una frase corta solo si dos significados llevarían a cosas distintas o si no se entiende nada. Una suposición nunca basta para algo delicado: el nombre del archivo o el destinatario deben estar claros, y si no lo están, pregunta.
 
-Entorno: Windows, carpeta de usuario {USUARIO}, escritorio en {ESCRITORIO}. Usa PowerShell para actuar en el equipo.
+Entorno: {ENTORNO}, carpeta de usuario {USUARIO}, escritorio en {ESCRITORIO}. Usa {TERMINAL} para actuar en el equipo.
 
 Música: para poner cualquier canción, artista, disco o ambiente usa la herramienta reproducir_en_spotify, con los términos de búsqueda bien escritos, corrigiendo los errores de transcripción. Si funciona, no hace falta que digas nada: la música ya habla. Si dice que no ha podido, cuéntalo. El volumen, la pausa y el cambio de canción ya los resuelve otro sistema antes de llegar a ti.
 
@@ -95,7 +96,9 @@ def _escritorio():
 
 
 SISTEMA = (
-    SISTEMA.replace("{USUARIO}", str(Path.home()))
+    SISTEMA.replace("{ENTORNO}", "Windows" if ES_WINDOWS else "macOS")
+    .replace("{TERMINAL}", "PowerShell" if ES_WINDOWS else "la terminal (zsh) y, para las apps, osascript")
+    .replace("{USUARIO}", str(Path.home()))
     .replace("{ESCRITORIO}", str(_escritorio()))
     .replace("{CONVERSACIONES}", str(CONVERSACIONES))
 )
@@ -104,7 +107,7 @@ SISTEMA = (
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 _sp = Path(sys.prefix) / "Lib" / "site-packages"
 for _pkg in ("nvidia/cublas/bin", "nvidia/cudnn/bin", "nvidia/cuda_nvrtc/bin"):
-    if (_sp / _pkg).exists():
+    if ES_WINDOWS and (_sp / _pkg).exists():
         os.add_dll_directory(str(_sp / _pkg))
         os.environ["PATH"] = str(_sp / _pkg) + os.pathsep + os.environ["PATH"]
 
@@ -118,10 +121,15 @@ from claude_agent_sdk.types import RateLimitEvent, ResultMessage, StreamEvent
 from faster_whisper import WhisperModel
 from piper import PiperVoice, SynthesisConfig
 
-from acciones import PASAR_A_CLAUDE, Sistema, ejecutar, interpretar
+from acciones import PASAR_A_CLAUDE, ejecutar, interpretar
 from memoria import Memoria
 from permisos import clasificar
 from uso import Uso
+
+if ES_WINDOWS:
+    from sistema_windows import Sistema
+else:
+    from sistema_mac import Sistema
 
 for _s in (sys.stdout, sys.stderr):
     _s.reconfigure(encoding="utf-8", errors="replace")
@@ -132,6 +140,8 @@ def salir_del_proceso(codigo):
     Todo está ya guardado, así que se termina el proceso sin descargar nada."""
     sys.stdout.flush()
     sys.stderr.flush()
+    if not ES_WINDOWS:
+        os._exit(codigo)
     kernel32 = ctypes.WinDLL("kernel32")
     kernel32.GetCurrentProcess.restype = ctypes.c_void_p
     kernel32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
@@ -139,8 +149,17 @@ def salir_del_proceso(codigo):
 
 
 def es_la_unica_copia():
-    """Dos copias a la vez responderían las dos a cada orden. Windows libera el bloqueo al cerrarse."""
+    """Dos copias a la vez responderían las dos a cada orden. El sistema libera el bloqueo al cerrarse."""
     global _bloqueo
+    if not ES_WINDOWS:
+        import fcntl
+
+        _bloqueo = open(RAIZ / ".jarvis.lock", "w")
+        try:
+            fcntl.flock(_bloqueo, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.CreateMutexW.restype = ctypes.c_void_p
     kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
@@ -308,6 +327,8 @@ class Segmentador:
 class Transcriptor:
     def __init__(self):
         try:
+            if not ES_WINDOWS:  # faster-whisper no usa la GPU de los Mac
+                raise RuntimeError("no se admite en este sistema")
             self.modelo = WhisperModel(MODELO_WHISPER, device="cuda", compute_type="int8_float32")
             self.dispositivo = "GPU"
             self.transcribir(np.zeros(SR, dtype=np.float32))
@@ -508,7 +529,7 @@ class Jarvis:
         return ClaudeAgentOptions(
             mcp_servers={"jarvis": create_sdk_mcp_server("jarvis", tools=[reproducir_en_spotify, abrir_web, ver_videos_en_pantalla, entrar_en_video, saltar_anuncio])},
             model=MODELO_CLAUDE,
-            cli_path=shutil.which("claude") or str(Path.home() / ".local/bin/claude.exe"),
+            cli_path=shutil.which("claude") or str(Path.home() / (".local/bin/claude.exe" if ES_WINDOWS else ".local/bin/claude")),
             cwd=str(Path.home()),
             include_partial_messages=True,
             setting_sources=[],
@@ -735,7 +756,8 @@ class Jarvis:
         self.tramas_sin_senal += 1
         if self.tramas_sin_senal * TRAMA / SR >= 30 and not self.sin_senal_avisado:
             self.sin_senal_avisado = True
-            log("oído", "Nota: 30 s de silencio absoluto en el micro. Es normal con anulación de ruido; si no le oigo al hablar, revise el silencio de los cascos.")
+            pista = "revise el silencio de los cascos." if ES_WINDOWS else "revise el silencio de los cascos y que la Terminal tenga permiso en Ajustes del Sistema, Privacidad y seguridad, Micrófono."
+            log("oído", f"Nota: 30 s de silencio absoluto en el micro. Es normal con anulación de ruido; si no le oigo al hablar, {pista}")
 
     async def bucle_oido(self):
         while True:
@@ -839,7 +861,7 @@ if __name__ == "__main__":
         sys.exit(0)
     try:
         if not es_la_unica_copia():
-            print("Jarvis ya está abierto: mire en la barra de tareas.", flush=True)
+            print(f"Jarvis ya está abierto: mire en {'la barra de tareas' if ES_WINDOWS else 'el Dock'}.", flush=True)
             salir_del_proceso(0)
         asyncio.run(principal(argumentos))
     except KeyboardInterrupt:
