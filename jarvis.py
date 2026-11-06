@@ -48,10 +48,10 @@ TRAMA = 480  # 30 ms
 SENAL_MINIMA = 5e-5  # por debajo, el micro está silenciado o apagado (unos -86 dB)
 FIN_DE_FRASE = 0.45  # segundos de silencio que cierran una frase corta
 FIN_DE_FRASE_LARGA = 1.2  # en una petición larga se hacen pausas para pensar: se espera más
-DURACION_MAXIMA = 60.0  # segundos de una sola frase
+DURACION_MAXIMA = 300.0  # solo para no quedarse atascado si un ruido constante parece voz sin fin
 CONTINUACION = 10.0  # lo dicho sin "Jarvis" tras una orden, durante este tiempo, se toma como parte de ella
-SEGUIMIENTO_TRAS_LLAMADA = 8.0  # segundos para hablar sin repetir "Jarvis"
-SEGUIMIENTO_TRAS_RESPUESTA = 6.0
+SEGUIMIENTO_TRAS_LLAMADA = 12.0  # segundos para EMPEZAR a hablar sin repetir "Jarvis"
+SEGUIMIENTO_TRAS_RESPUESTA = 10.0
 ESPERA_CONFIRMACION = 12.0
 AVISO_ESPERA = 2.5  # si tarda más en empezar, dice que lo está planteando
 AVISO_SIGUE = 12.0  # si se queda callado este tiempo en mitad de una tarea, avisa de que sigue
@@ -77,6 +77,8 @@ Lo que recibes es la transcripción automática de su voz, y a menudo tiene erro
 Entorno: Windows, carpeta de usuario {USUARIO}, escritorio en {ESCRITORIO}. Usa PowerShell para actuar en el equipo.
 
 Música: para poner cualquier canción, artista, disco o ambiente usa la herramienta reproducir_en_spotify, con los términos de búsqueda bien escritos, corrigiendo los errores de transcripción. Si funciona, no hace falta que digas nada: la música ya habla. Si dice que no ha podido, cuéntalo. El volumen, la pausa y el cambio de canción ya los resuelve otro sistema antes de llegar a ti.
+
+Webs: para abrir cualquier web usa siempre la herramienta abrir_web, nunca Start-Process: si ya hay una pestaña de ese sitio cambia a ella en lugar de abrir otra, que es como lo quiere el usuario.
 
 Actúa directamente, sin pedir permiso: un sistema externo pide confirmación por voz antes de las acciones delicadas. No preguntes "¿confirma?" tú mismo. Si una acción se rechaza, dilo en una frase y no busques otra forma de hacerla. En cada comando rellena "description" en español, con una frase corta que se entienda oída, porque se leerá al pedir confirmación.
 
@@ -480,8 +482,13 @@ class Jarvis:
             ok = await asyncio.to_thread(self.sistema.reproducir_en_spotify, args["consulta"])
             return {"content": [{"type": "text", "text": "Ya suena." if ok else "Se ha quedado buscado, pero no ha empezado a sonar."}]}
 
+        @tool("abrir_web", "Abre una web en Chrome. Si ya hay una pestaña de ese sitio, cambia a ella en vez de abrir otra.", {"sitio": str, "url": str})
+        async def abrir_web(args):
+            resultado = await asyncio.to_thread(self.sistema.abrir_web, args["sitio"], args["url"])
+            return {"content": [{"type": "text", "text": resultado}]}
+
         return ClaudeAgentOptions(
-            mcp_servers={"jarvis": create_sdk_mcp_server("jarvis", tools=[reproducir_en_spotify])},
+            mcp_servers={"jarvis": create_sdk_mcp_server("jarvis", tools=[reproducir_en_spotify, abrir_web])},
             model=MODELO_CLAUDE,
             cli_path=shutil.which("claude") or str(Path.home() / ".local/bin/claude.exe"),
             cwd=str(Path.home()),
@@ -622,7 +629,9 @@ class Jarvis:
     def ocupado(self):
         return self.tarea_consulta is not None
 
-    async def atender(self, texto):
+    async def atender(self, texto, t_inicio=None):
+        """t_inicio es cuándo empezó a hablar: una frase larga puede acabar fuera de la ventana de escucha."""
+        t_inicio = t_inicio if t_inicio is not None else time.monotonic()
         log("oído", texto or "(nada)")
         if not texto:
             return
@@ -632,7 +641,7 @@ class Jarvis:
             return
 
         hay_clave, orden = analizar_llamada(texto)
-        en_seguimiento = time.monotonic() < self.escucha_hasta
+        en_seguimiento = t_inicio < self.escucha_hasta
         if not hay_clave and not en_seguimiento and not self.ocupado():
             return
         if not hay_clave:
@@ -668,7 +677,7 @@ class Jarvis:
                 log("oído", f"en cola, para cuando termine: {orden}")
                 if time.monotonic() - self.t_consulta >= CONTINUACION:
                     self.voz.decir(RESP_EN_COLA)
-            elif time.monotonic() - self.t_consulta < CONTINUACION:
+            elif t_inicio - self.t_consulta < CONTINUACION:
                 self.pendientes.append(orden)
                 log("oído", f"añadido a la petición: {orden}")
             else:
@@ -731,7 +740,7 @@ class Jarvis:
                 texto = await asyncio.to_thread(self.transcriptor.transcribir, audio)
                 log("oído", f"transcrito en {time.monotonic() - t_fin:.2f}s")
                 self.voz.t_fin_voz = t_fin
-                await self.atender(texto)
+                await self.atender(texto, t_inicio=t_fin - len(audio) / SR)
             except Exception as e:  # si falla una frase, se dice y se sigue escuchando
                 log("oído", f"ERROR {type(e).__name__}: {e}")
                 self.voz.decir(RESP_ERROR)

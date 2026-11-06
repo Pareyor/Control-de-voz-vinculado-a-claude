@@ -184,6 +184,21 @@ async def pruebas_peticiones_largas():
         seguir.clear()
 
     jv._consultar = falso
+
+    # Una frase larga que empieza dentro de la ventana de escucha y acaba fuera debe atenderse.
+    ahora = time.monotonic()
+    jv.escucha_hasta = ahora - 2
+    await jv.atender("Cuando te diga que abras YouTube, usa la pestaña que ya tienes.", t_inicio=ahora - 9)
+    await asyncio.sleep(0)
+    comprobar("larga: empezó dentro de la ventana, se atiende", len(ordenes) == 1, str(ordenes))
+    seguir.set()
+    await asyncio.sleep(0.01)
+    ordenes.clear()
+    jv.escucha_hasta = ahora - 2
+    await jv.atender("Esto se lo digo a otra persona.", t_inicio=ahora - 1)
+    await asyncio.sleep(0)
+    comprobar("larga: empezó fuera de la ventana, se ignora", ordenes == [] and not jv.ocupado(), str(ordenes))
+
     await jv.atender("Jarvis, busca un vuelo a Lisboa.")
     await asyncio.sleep(0)
     await jv.atender("Y mira el tiempo del sábado.")
@@ -246,14 +261,17 @@ async def pruebas_peticiones_largas():
     jv.transcriptor = TranscriptorRoto()
     oidas = []
 
-    async def atender(texto):
+    async def atender(texto, t_inicio=None):
         oidas.append(texto)
 
     jv.atender = atender
     bucle = asyncio.create_task(jv.bucle_frases())
     jv.frases.put_nowait((np.zeros(10), time.monotonic()))
     jv.frases.put_nowait((np.zeros(10), time.monotonic()))
-    await asyncio.sleep(0.1)
+    for _ in range(100):  # el aviso de error carga la voz, que puede tardar en esta prueba
+        if oidas:
+            break
+        await asyncio.sleep(0.1)
     comprobar("tras un error sigue escuchando", oidas == ["Jarvis, ¿qué hora es?"] and not bucle.done(), str(oidas))
     bucle.cancel()
     await jv.voz.esperar()
@@ -353,6 +371,7 @@ async def pruebas_acciones():
     frase = await ejecutar("buscar", "the killers", s)
     comprobar("reproducir: si no suena lo admite", frase is not None and "no he conseguido" in frase, str(frase))
     comprobar("permisos: reproducir no pide confirmación", clasificar("mcp__jarvis__reproducir_en_spotify", {"consulta": "x"}) is None)
+    comprobar("permisos: abrir una web no pide confirmación", clasificar("mcp__jarvis__abrir_web", {"sitio": "x", "url": "y"}) is None)
 
     # El camino completo, desde la frase hasta la acción, sin Claude ni tokens.
     jv = J.Jarvis(J.Voz(sin_sonido=True), None)

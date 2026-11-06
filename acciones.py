@@ -117,17 +117,39 @@ class Sistema:
     def abrir(self, uri):
         os.startfile(uri)
 
+    @staticmethod
+    def _pids(programa):
+        salida = subprocess.run(["tasklist", "/fi", f"imagename eq {programa}", "/nh", "/fo", "csv"], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        return {int(m) for m in re.findall(rf'"{re.escape(programa)}","(\d+)"', salida.stdout, re.I)}
+
+    def abrir_web(self, sitio, url):
+        """Cambia a una pestaña de Chrome de ese sitio si ya existe; si no, abre la web."""
+        import uiautomation as ua
+
+        buscado = sitio.lower()
+        with ua.UIAutomationInitializerInThread():
+            pids = self._pids("chrome.exe")
+            ventanas = [v for v in ua.GetRootControl().GetChildren() if v.ProcessId in pids and v.ClassName == "Chrome_WidgetWin_1" and v.Name]
+            for v in ventanas:
+                pestana = self._buscar(v, lambda c: c.ControlTypeName == "TabItemControl" and buscado in (c.Name or "").lower(), limite=800, desde_el_final=True)
+                if pestana is not None:
+                    v.SetActive()
+                    pestana.GetSelectionItemPattern().Select()
+                    return f"He cambiado a la pestaña de {sitio} que ya estaba abierta."
+        self.abrir(url)
+        return f"No había ninguna pestaña de {sitio}, así que la he abierto."
+
     def _ventana_spotify(self, ua):
-        salida = subprocess.run(["tasklist", "/fi", "imagename eq Spotify.exe", "/nh", "/fo", "csv"], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
-        pids = {int(m) for m in re.findall(r'"Spotify\.exe","(\d+)"', salida.stdout, re.I)}
+        pids = self._pids("Spotify.exe")
         for v in ua.GetRootControl().GetChildren():
             if v.ProcessId in pids and v.Name and v.ClassName == "Chrome_WidgetWin_1":
                 return v
         return None
 
     @staticmethod
-    def _buscar(raiz, condicion, limite=1500):
-        """Recorre los controles en orden de pantalla y devuelve el primero que cumpla la condición."""
+    def _buscar(raiz, condicion, limite=1500, desde_el_final=False):
+        """Recorre los controles en orden de pantalla y devuelve el primero que cumpla la condición.
+        En Chrome las pestañas van al final del árbol y el contenido de la página, enorme, antes."""
         pendientes = [raiz]
         vistos = 0
         while pendientes and vistos < limite:
@@ -135,7 +157,8 @@ class Sistema:
             vistos += 1
             if c is not raiz and condicion(c):
                 return c
-            pendientes.extend(reversed(c.GetChildren()))
+            hijos = c.GetChildren()
+            pendientes.extend(hijos if desde_el_final else reversed(hijos))
         return None
 
     def _estado_busqueda(self, ventana):

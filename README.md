@@ -34,11 +34,12 @@ flowchart LR
 | «Jarvis, pon música», «… pausa», «… siguiente», «… canción anterior» | Controla la música con las teclas multimedia | No |
 | «Jarvis, pon música de Queen», «… pon The Killers en Spotify» | Busca en Spotify y reproduce el primer resultado | No |
 | «Jarvis, pon esa canción de los Killers que empieza con…» | Claude deduce cuál es y la reproduce | Sí |
+| «Jarvis, abre YouTube» | Cambia a la pestaña de Chrome que ya exista; si no hay ninguna, la abre | Sí |
 | «Jarvis, recuerda lo que hablamos el martes», «… la conversación sobre X» | Busca en vuestras conversaciones anteriores | Sí, solo lo que lee |
 | «Jarvis, para» | Corta lo que esté haciendo | No |
 | «Jarvis, apágate» | Da el resumen de consumo y se cierra | No |
 
-Tras cada respuesta puedes seguir hablando unos segundos sin repetir su nombre. Reacciona a «Jarvis» al principio de la frase, incluso tras un «mira» o un «oye», y al final, y responde a cualquier voz, no solo a la tuya. Reconoce lo que suena parecido («Yarvis», «Jurais»), porque la transcripción no siempre acierta el nombre.
+Tras cada respuesta tienes 10 segundos para empezar a hablar sin repetir su nombre, y la frase puede durar lo que necesites. Reacciona a «Jarvis» al principio de la frase, incluso tras un «mira» o un «oye», y al final, y responde a cualquier voz, no solo a la tuya. Reconoce lo que suena parecido («Yarvis», «Jurais»), porque la transcripción no siempre acierta el nombre.
 
 **Peticiones largas:** cuanto más hablas, más pausa te permite antes de darte por terminado. Si aun así sigue en marcha cuando continúas, lo que digas en los 10 segundos siguientes se añade a la petición, sin repetir su nombre. Más tarde, otra orden con «Jarvis» queda en cola, y lo que digas sin llamarle se ignora.
 
