@@ -125,6 +125,16 @@ def salir_del_proceso(codigo):
     kernel32.TerminateProcess(kernel32.GetCurrentProcess(), codigo)
 
 
+def es_la_unica_copia():
+    """Dos copias a la vez responderían las dos a cada orden. Windows libera el bloqueo al cerrarse."""
+    global _bloqueo
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+    _bloqueo = kernel32.CreateMutexW(None, 0, "Local\\JarvisAsistenteVoz")
+    return ctypes.get_last_error() != 183  # ERROR_ALREADY_EXISTS
+
+
 def log(etiqueta, texto=""):
     print(f"{datetime.datetime.now():%H:%M:%S} [{etiqueta}] {texto}", flush=True)
 
@@ -656,7 +666,11 @@ async def preparar(sin_sonido=False, sin_silenciar=False, motor=MOTOR_VOZ):
     transcriptor = await asyncio.to_thread(Transcriptor)
     log("inicio", f"Whisper en {transcriptor.dispositivo}")
     jarvis = Jarvis(voz, transcriptor, sin_silenciar=sin_silenciar)
-    await jarvis.conectar()
+    try:
+        await jarvis.conectar()
+    except Exception as e:  # p. ej. sin red al iniciar Windows: se reintenta con la primera orden
+        log("inicio", f"Claude aún no está disponible ({type(e).__name__}); lo intentaré con la primera orden.")
+        jarvis.cliente = None
     log("inicio", f"Preparado en {time.monotonic() - t0:.1f}s")
     return jarvis
 
@@ -696,6 +710,9 @@ if __name__ == "__main__":
         print(sd.query_devices())
         sys.exit(0)
     try:
+        if not es_la_unica_copia():
+            print("Jarvis ya está abierto: mire en la barra de tareas.", flush=True)
+            salir_del_proceso(0)
         asyncio.run(principal(argumentos))
     except KeyboardInterrupt:
         pass

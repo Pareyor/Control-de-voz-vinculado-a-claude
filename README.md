@@ -50,6 +50,8 @@ py -3.12 -m venv .venv
 
 La primera vez descarga los modelos de voz y transcripción. Después arranca en unos 4 segundos.
 
+Para que arranque al iniciar sesión, crea un acceso directo a `jarvis.bat` en la carpeta que abre `shell:startup`. Solo puede haber una copia abierta: si ya está en marcha, las siguientes se cierran.
+
 | Opción de `jarvis.bat` | Para qué sirve |
 |---|---|
 | `--dispositivos` | Lista los micrófonos disponibles |
