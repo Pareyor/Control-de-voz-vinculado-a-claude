@@ -8,13 +8,13 @@ import os
 import re
 
 # Herramientas que solo leen o no tocan nada fuera de la conversación.
-SIEMPRE_OK = {"Read", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite", "ToolSearch", "ListMcpResourcesTool", "ReadMcpResourceTool", "mcp__jarvis__reproducir_en_spotify", "mcp__jarvis__abrir_web"}
+SIEMPRE_OK = {"Read", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite", "ToolSearch", "ListMcpResourcesTool", "ReadMcpResourceTool", "mcp__jarvis__reproducir_en_spotify", "mcp__jarvis__abrir_web", "mcp__claude-in-chrome__navigate", "mcp__claude-in-chrome__tabs_create_mcp"}
 
 # Comandos de shell que solo consultan información, filtran resultados o abren algo.
 SHELL_OK = {
     "date", "dir", "echo", "hostname", "ipconfig", "ls", "nvidia-smi", "ping", "pwd", "systeminfo",
     "tasklist", "tree", "type", "cat", "head", "tail", "wc", "where", "whoami", "ver", "which", "findstr",
-    "explorer", "explorer.exe", "notepad", "notepad.exe", "calc", "calc.exe", "mspaint", "mspaint.exe",
+    "explorer", "explorer.exe", "notepad", "notepad.exe", "calc", "calc.exe", "mspaint", "mspaint.exe", "chrome", "chrome.exe",
     "start", "start-process", "saps", "invoke-item", "ii",
     "select-object", "select", "where-object", "?", "foreach-object", "%", "sort-object", "sort", "measure-object",
     "group-object", "format-table", "ft", "format-list", "fl", "out-string", "out-null", "convertto-json",
@@ -22,7 +22,7 @@ SHELL_OK = {
     "write-output", "write-host", "if", "else", "elseif", "foreach", "for", "while",
 }
 ABRIR = {"start", "start-process", "saps", "invoke-item", "ii"}
-EJECUTABLES_OK = {"explorer.exe", "notepad.exe", "calc.exe", "mspaint.exe"}
+EJECUTABLES_OK = {"explorer.exe", "notepad.exe", "calc.exe", "mspaint.exe", "chrome.exe"}
 
 # Intérpretes o elevación: nunca sin preguntar, aunque vayan dentro de un comando permitido.
 # El lookbehind evita confundir "*.py" o "C:\bash\x" con lanzar el programa.
@@ -119,8 +119,10 @@ def _segmento_seguro(seg):
 
 
 def shell_seguro(cmd):
-    # Una URL no es un ejecutable (.com). No absorbe ; & | para no esconder un segundo comando.
-    cmd = REDIRECCION_INOFENSIVA.sub(" ", re.sub(r"https?://[^\s;&|]+", "URL", cmd))
+    # Una URL no es un ejecutable (.com). Entre comillas puede llevar & (?a=1&b=2), salvo en comillas
+    # dobles con $ o `, que sí se evalúan. Sin comillas no absorbe ; & | para no esconder otro comando.
+    cmd = re.sub(r"""'https?://[^']*'|"https?://[^"$`]*\"""", "URL", cmd)
+    cmd = REDIRECCION_INOFENSIVA.sub(" ", re.sub(r"""https?://[^\s;&|$`()"']+""", "URL", cmd))
     if INTERPRETE.search(cmd):
         return False
 

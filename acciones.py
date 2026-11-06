@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 TECLA_PLAY_PAUSA = 0xB3
 TECLA_SIGUIENTE = 0xB0
@@ -135,9 +135,30 @@ class Sistema:
                 if pestana is not None:
                     v.SetActive()
                     pestana.GetSelectionItemPattern().Select()
-                    return f"He cambiado a la pestaña de {sitio} que ya estaba abierta."
+                    partes = urlsplit(url)
+                    if partes.path in ("", "/") and not partes.query:  # solo el sitio: ya estamos en él
+                        return f"He cambiado a la pestaña de {sitio} que ya estaba abierta."
+                    time.sleep(0.2)
+                    if self._ir_a(v, url, ua):
+                        return f"He cargado esa dirección en la pestaña de {sitio} que ya estaba abierta."
+                    break
         self.abrir(url)
-        return f"No había ninguna pestaña de {sitio}, así que la he abierto."
+        return "La he abierto en una pestaña nueva."
+
+    def _ir_a(self, ventana, url, ua):
+        """Escribe la dirección en la barra de Chrome. Devuelve False si no la encuentra."""
+        barra = self._buscar(
+            ventana,
+            lambda c: c.ControlTypeName == "EditControl" and any(p in (c.Name or "").lower() for p in ("address", "direcciones", "dirección")),
+            limite=800,
+            desde_el_final=True,
+        )
+        if barra is None:
+            return False
+        barra.SetFocus()
+        barra.GetValuePattern().SetValue(url)
+        ua.SendKeys("{Enter}", waitTime=0)
+        return True
 
     def _ventana_spotify(self, ua):
         pids = self._pids("Spotify.exe")
