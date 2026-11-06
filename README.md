@@ -88,14 +88,14 @@ Todo lo que Claude intenta hacer pasa antes por `permisos.py`, un filtro de cód
 
 | Sin preguntar | Pide un «sí» por voz |
 |---|---|
-| Leer archivos y buscar en la web | Borrar o sobrescribir archivos |
-| Crear archivos nuevos | Modificar archivos existentes |
-| Abrir programas y enlaces | Enviar correos o usar acciones externas |
-| Consultar información del sistema | Cualquier comando que no reconozca como seguro |
+| Leer, crear, editar, copiar y mover archivos | Borrar archivos o carpetas, o sobrescribir uno entero |
+| Abrir y cerrar programas, usar webs y pulsar botones | Formatear, apagar o reiniciar, desinstalar programas |
+| Instalar programas y ejecutar scripts | Enviar, compartir o borrar en servicios externos, como un correo |
+| Cualquier otra cosa que pidas | Comandos ocultos que no se puedan leer antes de ejecutarlos |
 
 Si no respondes en 12 segundos o hay dudas, la acción se rechaza.
 
-**Limitaciones:** la confirmación identifica a quien dice «sí» solo por estar cerca del micro, no por su voz. Y una lista de comandos seguros reduce el riesgo, pero no es una garantía absoluta. Vigila lo que le pides.
+**Limitaciones:** este filtro deja hacer casi todo, así que un error de transcripción o una instrucción maliciosa en una web pueden tener efecto sin que nadie lo confirme. No inspecciona el contenido de un script guardado en un archivo, ni distingue un botón de «Comprar» de otro cualquiera: pagar y publicar solo están cubiertos por la instrucción a Claude de consultar antes, que no es una garantía. La confirmación tampoco identifica por la voz a quien dice «sí».
 
 ## Velocidad
 
