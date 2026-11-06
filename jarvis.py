@@ -29,7 +29,9 @@ CACHE = RAIZ / "cache"
 CONVERSACIONES = Path(os.environ.get("JARVIS_CONVERSACIONES", RAIZ / "conversaciones"))
 
 MODELO_CLAUDE = "claude-opus-5-5"  # el más capaz; "sonnet" responde algo antes y gasta menos
-MODELO_WHISPER = "small"
+MODELO_WHISPER = "medium"
+# Palabras sueltas, no órdenes: con frases completas Whisper las copia cuando oye mal y se inventa peticiones.
+PISTA_WHISPER = "Jarvis, Spotify, volumen, canción, bloc de notas, escritorio, archivo, correo."
 
 MOTOR_VOZ = "piper"  # "piper": local, unos 0,07 s por frase. "edge": Microsoft, más natural, unos 1 s
 PIPER_VOZ = "es_ES-davefx-medium"  # castellano de España
@@ -44,7 +46,10 @@ VOZ_SR = 24000
 SR = 16000
 TRAMA = 480  # 30 ms
 SENAL_MINIMA = 5e-5  # por debajo, el micro está silenciado o apagado (unos -86 dB)
-FIN_DE_FRASE = 0.45  # segundos de silencio que cierran una frase
+FIN_DE_FRASE = 0.45  # segundos de silencio que cierran una frase corta
+FIN_DE_FRASE_LARGA = 1.2  # en una petición larga se hacen pausas para pensar: se espera más
+DURACION_MAXIMA = 60.0  # segundos de una sola frase
+CONTINUACION = 10.0  # lo dicho sin "Jarvis" tras una orden, durante este tiempo, se toma como parte de ella
 SEGUIMIENTO_TRAS_LLAMADA = 8.0  # segundos para hablar sin repetir "Jarvis"
 SEGUIMIENTO_TRAS_RESPUESTA = 6.0
 ESPERA_CONFIRMACION = 12.0
@@ -57,6 +62,7 @@ RESP_SIGUE = "Sigo en ello, señor."
 RESP_ERROR = "Disculpe, señor. He tenido un problema con esa petición."
 RESP_PARADO = "Como desee, señor."
 RESP_SALIR = "Hasta luego, señor."
+RESP_EN_COLA = "Enseguida, señor, en cuanto termine con esto."
 
 SISTEMA = """Eres Jarvis, el asistente de voz del ordenador de tu usuario. Todo lo que escribas se leerá en voz alta.
 
@@ -66,11 +72,11 @@ En las tareas que requieran varios pasos o herramientas, cuéntale el proceso mi
 
 Memoria: tus conversaciones anteriores con el usuario están en {CONVERSACIONES}, un archivo por sesión llamado AAAA-MM-DD_HHMMSS.md. Si te pide recordar una conversación o algo de lo que hablasteis, o lo menciona dando por hecho que lo sabes, búscalo ahí: por fecha en el nombre del archivo o por tema en el contenido, probando sinónimos y variantes porque son transcripciones con posibles errores. Lee solo lo necesario y cuéntalo en pocas frases. Si no lo encuentras, dilo con claridad: nunca te inventes un recuerdo. Fuera de eso, no consultes esa carpeta.
 
-Lo que recibes es la transcripción automática de su voz: puede tener errores, interpreta la intención razonable. Si no se entiende, pregunta en una frase corta.
+Lo que recibes es la transcripción automática de su voz, y a menudo tiene errores: palabras cambiadas por otras que suenan parecido, frases cortadas o signos mal puestos. Deduce qué quiso decir por cómo suena, por el contexto de la conversación y por lo que suele pedirte; por ejemplo, "abre el blog de notas" es el bloc de notas y "ponde Killers" es poner a The Killers. No le señales los errores ni le corrijas. Si la acción es inofensiva, actúa según lo más probable y, si no estabas seguro, di de pasada qué has entendido. Pregunta en una frase corta solo si dos significados llevarían a cosas distintas o si no se entiende nada. Una suposición nunca basta para algo delicado: el nombre del archivo o el destinatario deben estar claros, y si no lo están, pregunta.
 
 Entorno: Windows, carpeta de usuario {USUARIO}, escritorio en {ESCRITORIO}. Usa PowerShell para actuar en el equipo.
 
-Música: usa Spotify. Para buscar música que te pida con palabras libres, ejecuta Start-Process "spotify:search:TERMINOS", con los espacios como %20, y di que se lo dejas buscado: no puedes garantizar que empiece a sonar. El volumen, la pausa y el cambio de canción ya los resuelve otro sistema antes de llegar a ti.
+Música: para poner cualquier canción, artista, disco o ambiente usa la herramienta reproducir_en_spotify, con los términos de búsqueda bien escritos, corrigiendo los errores de transcripción. Si funciona, no hace falta que digas nada: la música ya habla. Si dice que no ha podido, cuéntalo. El volumen, la pausa y el cambio de canción ya los resuelve otro sistema antes de llegar a ti.
 
 Actúa directamente, sin pedir permiso: un sistema externo pide confirmación por voz antes de las acciones delicadas. No preguntes "¿confirma?" tú mismo. Si una acción se rechaza, dilo en una frase y no busques otra forma de hacerla. En cada comando rellena "description" en español, con una frase corta que se entienda oída, porque se leerá al pedir confirmación.
 
@@ -103,7 +109,7 @@ import miniaudio
 import numpy as np
 import sounddevice as sd
 import webrtcvad
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, PermissionResultAllow, PermissionResultDeny
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, PermissionResultAllow, PermissionResultDeny, create_sdk_mcp_server, tool
 from claude_agent_sdk.types import RateLimitEvent, ResultMessage, StreamEvent
 from faster_whisper import WhisperModel
 from piper import PiperVoice, SynthesisConfig
@@ -143,15 +149,19 @@ def log(etiqueta, texto=""):
 
 
 # ---------------------------------------------------------------- análisis del texto
-PALABRA_CLAVE = re.compile(r"^(j|y|h|g|ch|sh)ar[vb]i[sz]?$")
-SALUDOS = {"hola", "hey", "ey", "eh", "oye", "buenas", "buenos", "dias", "tardes", "noches", "ok", "vale", "a", "ver"}
+SONIDO_INICIAL = re.compile(r"^(j|y|h|g|ch|sh)")
+SALUDOS = {
+    "hola", "hey", "ey", "eh", "oye", "buenas", "buenos", "dias", "tardes", "noches", "ok", "vale", "a", "ver",
+    "mira", "bueno", "pues", "venga", "vamos", "escucha", "perdona", "disculpa", "oiga", "entonces", "y", "tio", "bien",
+}
+CORTESIA_FINAL = {"por", "favor", "porfa", "gracias"}
 SOLO_LLAMADA = {
     "", "hola", "hey", "oye", "buenas", "estas", "estas ahi", "estas por ahi", "sigues ahi", "ahi estas",
     "me oyes", "me escuchas", "me recibes", "estas despierto", "despierta",
 }
 PARAR = re.compile(r"^(para|parate|paralo|detente|cancela|cancelalo|callate|silencio|basta)( ya| por favor)?$")
 SALIR = re.compile(r"^(apagate|desconectate|cierrate|adios|hasta luego|puedes descansar)( ya| por favor)?$")
-CONSUMO = re.compile(r"\b(consumo|tokens)\b|cuanto (llevo|he) (gastado|usado|consumido)")
+CONSUMO = re.compile(r"\b(consumo|tokens)\b|cuanto (llevo|he) (gastado|usado|consumido)|\buso (de|del) (la |esta )?(sesion|semana|plan)|\buso semanal")
 ALUCINACIONES = re.compile(r"subt[ií]tul|amara\.org|gracias por ver|suscr[ií]bete", re.I)
 SI = re.compile(r"\b(si|confirmo|confirmado|adelante|hazlo|procede|afirmativo|de acuerdo|ok|vale)\b")
 NO = re.compile(r"\b(no|cancela|cancelalo|negativo|para|detente|espera|mejor no)\b")
@@ -162,16 +172,42 @@ def normalizar(texto):
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", sin_acentos)).strip()
 
 
+def _distancia(a, b):
+    previa = list(range(len(b) + 1))
+    for i, x in enumerate(a, 1):
+        actual = [i]
+        for j, y in enumerate(b, 1):
+            actual.append(min(previa[j] + 1, actual[j - 1] + 1, previa[j - 1] + (x != y)))
+        previa = actual
+    return previa[-1]
+
+
+def es_palabra_clave(palabra):
+    """Acepta lo que suena a "Jarvis" ("Yarvis", "Jurais"), pero no "París", "jueves", "haría" ni "Chris"."""
+    if not SONIDO_INICIAL.match(palabra):
+        return False
+    unificada = SONIDO_INICIAL.sub("j", palabra).replace("b", "v").replace("z", "s")
+    if len(unificada) < 5 or unificada[-1] not in "si":
+        return False
+    # Con otro sonido inicial, más estricto: "harías" está a dos cambios de "jarvis" y es muy común.
+    return _distancia(unificada, "jarvis") <= (2 if palabra[0] == "j" else 1)
+
+
 def analizar_llamada(texto):
     """Devuelve (hay_palabra_clave, orden). Solo cuenta "Jarvis" al principio (tras un saludo) o al final."""
     tokens = texto.split()
     norm = [normalizar(t) for t in tokens]
-    pos = next((i for i, t in enumerate(norm) if PALABRA_CLAVE.match(t)), None)
+    for i in range(len(norm) - 1):  # a veces lo parte en dos: "Jar vis"
+        if len(norm[i]) <= 3 and not es_palabra_clave(norm[i + 1]) and es_palabra_clave(norm[i] + norm[i + 1]):
+            tokens[i : i + 2] = [tokens[i] + tokens[i + 1]]
+            norm[i : i + 2] = [norm[i] + norm[i + 1]]
+            break
+    pos = next((i for i, t in enumerate(norm) if es_palabra_clave(t)), None)
     if pos is None:
         return False, ""
     if all(t in SALUDOS or not t for t in norm[:pos]):
         return True, " ".join(tokens[pos + 1:]).strip(" ,.;:¿¡?!")
-    if pos == len(tokens) - 1:
+    if all(t in CORTESIA_FINAL or not t for t in norm[pos + 1 :]):  # "..., Jarvis, por favor"
         return True, " ".join(tokens[:pos]).strip(" ,.;:")
     return False, ""
 
@@ -248,7 +284,10 @@ class Segmentador:
         self.voz += hay_voz
         self.silencio = 0 if hay_voz else self.silencio + 1
         duracion = len(self.frase) * TRAMA / SR
-        if self.silencio * TRAMA / SR < FIN_DE_FRASE and duracion < 20:
+        # "Jarvis, pausa" responde enseguida, pero a media explicación no se corta por respirar.
+        hablado = self.voz * TRAMA / SR
+        limite = FIN_DE_FRASE + (FIN_DE_FRASE_LARGA - FIN_DE_FRASE) * float(np.clip((hablado - 1.5) / 3.0, 0, 1))
+        if self.silencio * TRAMA / SR < limite and duracion < DURACION_MAXIMA:
             return None
 
         audio = np.concatenate(self.frase)
@@ -276,7 +315,7 @@ class Transcriptor:
 
     def transcribir(self, audio):
         segmentos, _ = self.modelo.transcribe(
-            audio, language="es", beam_size=1, initial_prompt="Jarvis.", condition_on_previous_text=False
+            audio, language="es", beam_size=1, initial_prompt=PISTA_WHISPER, condition_on_previous_text=False
         )
         partes = [s.text for s in segmentos if s.no_speech_prob < 0.6 and s.avg_logprob > -1.0]
         texto = "".join(partes).strip()
@@ -298,6 +337,7 @@ class Voz:
         self.dicho = []
         self.fijas = {}
         self.t_fin_voz = None  # cuándo terminó de hablar el usuario, para medir la latencia
+        self.usuario_hablando = lambda: False
         self.tarea = asyncio.create_task(self._reproductor())
 
     def _cargar_piper(self):
@@ -387,6 +427,10 @@ class Voz:
     async def _reproductor(self):
         while True:
             texto, fuente = await self.cola.get()
+            # Al hablar se cierra el micro: si el usuario sigue con su frase, se perdería. Se le deja acabar.
+            limite = time.monotonic() + 15
+            while self.usuario_hablando() and time.monotonic() < limite:
+                await asyncio.sleep(0.05)
             self.hablando = True
             self.parar_evento.clear()
             try:
@@ -418,6 +462,9 @@ class Jarvis:
         self.confirmacion = None
         self.escucha_hasta = 0.0
         self.pidiendo_confirmacion = False
+        self.pendientes = []
+        self.t_consulta = 0.0
+        self.voz.usuario_hablando = lambda: self.segmentador.frase is not None
         self.ultima_voz = 0.0
         self.tramas_sin_senal = 0
         self.sin_senal_avisado = False
@@ -428,7 +475,13 @@ class Jarvis:
 
     # ---- Claude
     def _opciones(self):
+        @tool("reproducir_en_spotify", "Busca en Spotify y reproduce el primer resultado.", {"consulta": str})
+        async def reproducir_en_spotify(args):
+            ok = await asyncio.to_thread(self.sistema.reproducir_en_spotify, args["consulta"])
+            return {"content": [{"type": "text", "text": "Ya suena." if ok else "Se ha quedado buscado, pero no ha empezado a sonar."}]}
+
         return ClaudeAgentOptions(
+            mcp_servers={"jarvis": create_sdk_mcp_server("jarvis", tools=[reproducir_en_spotify])},
             model=MODELO_CLAUDE,
             cli_path=shutil.which("claude") or str(Path.home() / ".local/bin/claude.exe"),
             cwd=str(Path.home()),
@@ -551,6 +604,18 @@ class Jarvis:
             except OSError as e:
                 log("memoria", f"No se pudo guardar: {e}")
             self.escucha_hasta = time.monotonic() + SEGUIMIENTO_TRAS_RESPUESTA
+
+    async def _ciclo_consultas(self, orden):
+        """Atiende la orden y después lo que se haya dicho entretanto: no se tira nada."""
+        try:
+            while True:
+                self.t_consulta = time.monotonic()
+                await self._consultar(orden)
+                if not self.pendientes:
+                    return
+                orden = "Ha seguido hablando mientras trabajabas. Puede completar su petición o ser algo dicho a otra persona; ignóralo si no tiene sentido: " + " ".join(self.pendientes)
+                self.pendientes.clear()
+        finally:
             self.tarea_consulta = None
 
     # ---- decidir qué hacer con cada frase
@@ -576,7 +641,8 @@ class Jarvis:
 
         if PARAR.match(norm):
             self.voz.parar()
-            if self.ocupado():
+            self.pendientes.clear()
+            if self.ocupado() and self.cliente:
                 await self.cliente.interrupt()
             self.voz.decir(RESP_PARADO)
             return
@@ -595,7 +661,18 @@ class Jarvis:
                 self.escucha_hasta = time.monotonic() + SEGUIMIENTO_TRAS_RESPUESTA
             return
         if self.ocupado():
-            log("oído", "ignorado: sigo con la petición anterior")
+            if hay_clave and norm in SOLO_LLAMADA:
+                self.voz.decir(RESP_SIGUE)
+            elif hay_clave:
+                self.pendientes.append(orden)
+                log("oído", f"en cola, para cuando termine: {orden}")
+                if time.monotonic() - self.t_consulta >= CONTINUACION:
+                    self.voz.decir(RESP_EN_COLA)
+            elif time.monotonic() - self.t_consulta < CONTINUACION:
+                self.pendientes.append(orden)
+                log("oído", f"añadido a la petición: {orden}")
+            else:
+                log("oído", "ignorado: sigo con la petición anterior y no me ha llamado")
             return
         if hay_clave and norm in SOLO_LLAMADA:
             self.voz.decir(random.choice(RESP_LLAMADA))
@@ -610,7 +687,7 @@ class Jarvis:
             await self.voz.esperar()
             self.escucha_hasta = time.monotonic() + SEGUIMIENTO_TRAS_RESPUESTA
             return
-        self.tarea_consulta = asyncio.create_task(self._consultar(orden))
+        self.tarea_consulta = asyncio.create_task(self._ciclo_consultas(orden))
 
     # ---- bucles
     def micro_callback(self, indata, _frames, _tiempo, _estado):
@@ -635,21 +712,29 @@ class Jarvis:
     async def bucle_oido(self):
         while True:
             trama = await self.tramas.get()
-            self.vigilar_senal(trama)
-            if self.silenciado():
+            try:
+                self.vigilar_senal(trama)
+                if self.silenciado():
+                    self.segmentador.reiniciar()
+                    continue
+                frase = self.segmentador.alimentar(trama)
+                if frase is not None:
+                    self.frases.put_nowait((frase, time.monotonic()))
+            except Exception as e:  # un error en una trama no puede dejarlo sordo para siempre
+                log("oído", f"ERROR {type(e).__name__}: {e}")
                 self.segmentador.reiniciar()
-                continue
-            frase = self.segmentador.alimentar(trama)
-            if frase is not None:
-                self.frases.put_nowait((frase, time.monotonic()))
 
     async def bucle_frases(self):
         while True:
             audio, t_fin = await self.frases.get()
-            texto = await asyncio.to_thread(self.transcriptor.transcribir, audio)
-            log("oído", f"transcrito en {time.monotonic() - t_fin:.2f}s")
-            self.voz.t_fin_voz = t_fin
-            await self.atender(texto)
+            try:
+                texto = await asyncio.to_thread(self.transcriptor.transcribir, audio)
+                log("oído", f"transcrito en {time.monotonic() - t_fin:.2f}s")
+                self.voz.t_fin_voz = t_fin
+                await self.atender(texto)
+            except Exception as e:  # si falla una frase, se dice y se sigue escuchando
+                log("oído", f"ERROR {type(e).__name__}: {e}")
+                self.voz.decir(RESP_ERROR)
 
     async def escuchar(self, micro=None):
         self.bucle = asyncio.get_running_loop()
@@ -677,7 +762,7 @@ class Jarvis:
 async def preparar(sin_sonido=False, sin_silenciar=False, motor=MOTOR_VOZ):
     t0 = time.monotonic()
     voz = Voz(sin_sonido=sin_sonido, motor=motor)
-    await voz.precargar(RESP_LLAMADA + [RESP_ESPERA, RESP_SIGUE, RESP_ERROR, RESP_PARADO, RESP_SALIR])
+    await voz.precargar(RESP_LLAMADA + [RESP_ESPERA, RESP_SIGUE, RESP_ERROR, RESP_PARADO, RESP_SALIR, RESP_EN_COLA])
     transcriptor = await asyncio.to_thread(Transcriptor)
     log("inicio", f"Whisper en {transcriptor.dispositivo}")
     jarvis = Jarvis(voz, transcriptor, sin_silenciar=sin_silenciar)

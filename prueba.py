@@ -39,10 +39,22 @@ def pruebas_texto():
         ("Oye Jarvis, abre Spotify.", True, "abre Spotify"), ("Yarvis, ¿qué hora es?", True, "qué hora es"),
         ("¿Qué hora es, Jarvis?", True, "¿Qué hora es"), ("Le dije a Jarvis que no viniera.", False, ""),
         ("¿Qué hora es?", False, ""),
+        # Lo que suena a Jarvis, incluidos errores reales de transcripción.
+        ("¡Jurais!", True, ""), ("Jarbis, abre Spotify.", True, "abre Spotify"), ("Jar vis, ¿qué hora es?", True, "qué hora es"),
+        ("Hola Harvis.", True, ""), ("Jervis, pausa.", True, "pausa"), ("Jarvi, pausa.", True, "pausa"),
+        ("Mira Jarvis, busca vuelos.", True, "busca vuelos"), ("Bueno, pues Jarvis, abre Spotify.", True, "abre Spotify"),
+        ("Busca vuelos, Jarvis, por favor.", True, "Busca vuelos"), ("Busca vuelos, Jarvis, gracias.", True, "Busca vuelos"),
+        # Lo que no debe activarlo.
+        ("París es muy bonita.", False, ""), ("Davis ganó ayer.", False, ""), ("Nos vemos el jueves.", False, ""),
+        ("Me gusta el gris.", False, ""), ("Ya es tarde.", False, ""), ("Gracias.", False, ""), ("Hoy es lunes.", False, ""),
+        ("Jamás lo haría.", False, ""), ("Las horas pasan.", False, ""), ("Chris viene mañana.", False, ""), ("¿Tú lo harías?", False, ""),
     ]
     for texto, clave, orden in casos:
         r = J.analizar_llamada(texto)
         comprobar(f"llamada {texto!r}", r == (clave, orden), str(r))
+    for orden in ("dime el uso de esta sesion", "cuanto consumo llevo", "dime el uso semanal"):
+        comprobar(f"consumo sin Claude {orden!r}", J.CONSUMO.search(orden) is not None)
+    comprobar("«el uso de la fuerza» no es consumo", J.CONSUMO.search("explicame el uso de la fuerza") is None)
     for texto, esperado in [("Sí.", True), ("Sí, adelante", True), ("No.", False), ("No, mejor no", False), ("Sí, bueno, no", False), ("El coche", None)]:
         comprobar(f"confirmación {texto!r}", J.interpretar_confirmacion(texto) is esperado)
 
@@ -160,6 +172,93 @@ def pruebas_memoria():
     comprobar("memoria: otra sesión, otro archivo", len(list(carpeta.glob("*.md"))) == 2)
 
 
+async def pruebas_peticiones_largas():
+    """Con un Claude falso: nada de lo que se diga mientras trabaja debe perderse. No gasta tokens."""
+    jv = J.Jarvis(J.Voz(sin_sonido=True), None)
+    ordenes = []
+    seguir = asyncio.Event()
+
+    async def falso(orden):
+        ordenes.append(orden)
+        await seguir.wait()
+        seguir.clear()
+
+    jv._consultar = falso
+    await jv.atender("Jarvis, busca un vuelo a Lisboa.")
+    await asyncio.sleep(0)
+    await jv.atender("Y mira el tiempo del sábado.")
+    comprobar("larga: la continuación no se pierde", jv.pendientes == ["Y mira el tiempo del sábado."], str(jv.pendientes))
+    seguir.set()
+    await asyncio.sleep(0.01)
+    comprobar("larga: se atiende después", len(ordenes) == 2 and "sábado" in ordenes[1], str(ordenes))
+    jv.t_consulta = 0
+    await jv.atender("Se ha ido la luz en casa de mi vecino.")
+    comprobar("larga: mucho después y sin llamarle, se ignora", jv.pendientes == [], str(jv.pendientes))
+    jv.voz.dicho.clear()
+    await jv.atender("Jarvis.")
+    comprobar("larga: si le llamas mientras trabaja, contesta", jv.voz.dicho == [J.RESP_SIGUE] and not jv.pendientes, str(jv.voz.dicho))
+    jv.voz.dicho.clear()
+    await jv.atender("Jarvis, abre el correo.")
+    comprobar("larga: otra orden queda en cola y lo dice", jv.pendientes == ["abre el correo"] and jv.voz.dicho == [J.RESP_EN_COLA], str((jv.pendientes, jv.voz.dicho)))
+    await jv.atender("Jarvis, para.")
+    comprobar("larga: «para» vacía la cola", jv.pendientes == [])
+    seguir.set()
+    await asyncio.sleep(0.01)
+    comprobar("larga: al acabar queda libre", not jv.ocupado())
+
+    # El segmentador no corta a media explicación, pero una orden corta sigue siendo rápida.
+    tono = (0.05 * np.sin(np.arange(J.SR * 6) * 0.2)).astype(np.float32)
+
+    class VadFalso:
+        def is_speech(self, pcm, sr):
+            return np.abs(np.frombuffer(pcm, dtype=np.int16)).max() > 500
+
+    def contar(x):
+        s = J.Segmentador()
+        s.vad = VadFalso()
+        frases = 0
+        fin = None
+        for i in range(0, len(x) - J.TRAMA, J.TRAMA):
+            if s.alimentar(x[i : i + J.TRAMA]) is not None:
+                frases += 1
+                fin = i / J.SR
+        return frases, fin
+
+    silencio = lambda t: np.zeros(int(J.SR * t), dtype=np.float32) + 1e-5
+    voz_de = lambda t: tono[: int(J.SR * t)]
+    frases, fin = contar(np.concatenate([silencio(1), voz_de(1), silencio(2)]))
+    comprobar("frase corta: se cierra con 0,45 s", frases == 1 and fin < 1 + 1 + 0.6, f"{frases} {fin}")
+    frases, _ = contar(np.concatenate([silencio(1), voz_de(5), silencio(0.9), voz_de(2), silencio(2)]))
+    comprobar("frase larga: una pausa de 0,9 s no la corta", frases == 1, str(frases))
+
+    # Un error en una frase no puede dejarlo sordo.
+    jv = J.Jarvis(J.Voz(sin_sonido=True), None)
+
+    class TranscriptorRoto:
+        veces = 0
+
+        def transcribir(self, audio):
+            self.veces += 1
+            if self.veces == 1:
+                raise RuntimeError("fallo de la gráfica")
+            return "Jarvis, ¿qué hora es?"
+
+    jv.transcriptor = TranscriptorRoto()
+    oidas = []
+
+    async def atender(texto):
+        oidas.append(texto)
+
+    jv.atender = atender
+    bucle = asyncio.create_task(jv.bucle_frases())
+    jv.frases.put_nowait((np.zeros(10), time.monotonic()))
+    jv.frases.put_nowait((np.zeros(10), time.monotonic()))
+    await asyncio.sleep(0.1)
+    comprobar("tras un error sigue escuchando", oidas == ["Jarvis, ¿qué hora es?"] and not bucle.done(), str(oidas))
+    bucle.cancel()
+    await jv.voz.esperar()
+
+
 async def pruebas_senal():
     jv = J.Jarvis(J.Voz(sin_sonido=True), None)
     jv.uso = Uso(Path(tempfile.mkdtemp(prefix="jarvis_uso_")) / "uso.json")
@@ -180,6 +279,7 @@ class SistemaFalso:
     def __init__(self, volumen=50, abierto=True):
         self.volumen = volumen
         self.abierto = abierto
+        self.suena = True
         self.hecho = []
 
     def leer_volumen(self):
@@ -201,10 +301,14 @@ class SistemaFalso:
         self.hecho.append(("abrir", uri))
         self.abierto = True
 
+    def reproducir_en_spotify(self, consulta):
+        self.hecho.append(("reproducir", consulta))
+        return self.suena
+
 
 async def pruebas_acciones():
     reconocidas = {
-        "sube el volumen": ("subir", 10), "subele un poco": ("subir", 5), "sube mucho el volumen": ("subir", 20), "sube el volumen mucho": ("subir", 20), "sube un poco el volumen": ("subir", 5), "baja un poco la musica": ("bajar", 5),
+        "pon algo para estudiar": ("buscar", "estudiar"), "sube el volumen": ("subir", 10), "subele un poco": ("subir", 5), "sube mucho el volumen": ("subir", 20), "sube el volumen mucho": ("subir", 20), "sube un poco el volumen": ("subir", 5), "baja un poco la musica": ("bajar", 5),
         "baja el volumen por favor": ("bajar", 10), "mas alto": ("subir", 10), "mas bajo": ("bajar", 10),
         "pon el volumen al 40": ("fijar", 40), "volumen al 40 por ciento": ("fijar", 40), "baja el volumen a treinta": ("fijar", 30),
         "pon el volumen al treinta y cinco": ("fijar", 35), "volumen 150": ("fijar", 100),
@@ -214,12 +318,14 @@ async def pruebas_acciones():
         "cambia de cancion": ("siguiente", 10), "cancion anterior": ("anterior", 10), "pon la anterior": ("anterior", 10),
         "pon musica de queen": ("buscar", "queen"), "ponme la cancion bohemian rhapsody": ("buscar", "bohemian rhapsody"),
         "pon the killers en spotify": ("buscar", "the killers"),
+        # Errores de transcripción.
+        "baje el volumen": ("bajar", 10), "suba el volumen": ("subir", 10), "siguientes canciones": ("siguiente", 10), "cancion anteriores": ("anterior", 10),
     }
     for frase, esperado in reconocidas.items():
         if esperado is not None:
             comprobar(f"acción {frase!r}", interpretar(frase) == esperado, str(interpretar(frase)))
     # Estas deben seguir llegando a Claude.
-    for frase in ("sube el archivo a drive", "baja las notas de la web", "pon un temporizador de cinco minutos", "pon algo para estudiar", "para", "sigue", "continua", "que hora es", "pon el pc en suspension", "busca el tiempo de mañana"):
+    for frase in ("sube el archivo a drive", "baja las notas de la web", "pon un temporizador de cinco minutos", "para", "sigue", "continua", "que hora es", "pon el pc en suspension", "busca el tiempo de mañana", "sube el resumen", "pon mucha sal", "silencia a juan", "baja el telon"):
         comprobar(f"sigue hacia Claude {frase!r}", interpretar(frase) is None, str(interpretar(frase)))
 
     s = SistemaFalso()
@@ -240,8 +346,13 @@ async def pruebas_acciones():
     await ejecutar("reproducir", 10, s, espera_arranque=0)
     comprobar("música con Spotify cerrado: lo abre y pulsa", s.hecho == [("abrir", "spotify:"), ("tecla", TECLA_PLAY_PAUSA)], str(s.hecho))
     s = SistemaFalso()
-    await ejecutar("buscar", "the killers", s)
-    comprobar("buscar: abre Spotify con la búsqueda", s.hecho == [("abrir", "spotify:search:the%20killers")], str(s.hecho))
+    frase = await ejecutar("buscar", "the killers", s)
+    comprobar("reproducir: si suena no dice nada", frase is None and s.hecho == [("reproducir", "the killers")], str(s.hecho))
+    s = SistemaFalso()
+    s.suena = False
+    frase = await ejecutar("buscar", "the killers", s)
+    comprobar("reproducir: si no suena lo admite", frase is not None and "no he conseguido" in frase, str(frase))
+    comprobar("permisos: reproducir no pide confirmación", clasificar("mcp__jarvis__reproducir_en_spotify", {"consulta": "x"}) is None)
 
     # El camino completo, desde la frase hasta la acción, sin Claude ni tokens.
     jv = J.Jarvis(J.Voz(sin_sonido=True), None)
@@ -413,6 +524,7 @@ if __name__ == "__main__":
     pruebas_memoria()
     asyncio.run(pruebas_senal())
     asyncio.run(pruebas_acciones())
+    asyncio.run(pruebas_peticiones_largas())
     if "--rapida" not in sys.argv:
         asyncio.run(pruebas_completas())
     print(f"\n{'TODO OK' if not fallos else 'FALLOS: ' + str(fallos)}", flush=True)

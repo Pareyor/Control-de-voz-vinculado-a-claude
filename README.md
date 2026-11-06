@@ -4,7 +4,7 @@ Asistente de voz para Windows, en castellano de España. Dices «Jarvis», le pi
 
 No usa un modelo local ni un asistente ya hecho: este programa solo pone el oído y la voz, y el cerebro es Claude Code con tu propia cuenta.
 
-> **Estado:** funciona el circuito de voz, la memoria, el volumen y el control de música. Una canción concreta se deja buscada en Spotify, pero no empieza a sonar sola. «Pausa» y «pon música» envían la misma tecla, así que si ya estaba en ese estado hacen lo contrario.
+> **Estado:** funciona el circuito de voz, la memoria, el volumen y el control de música. «Pausa» y «pon música» envían la misma tecla, así que si ya estaba en ese estado hacen lo contrario. Poner una canción pulsa el botón de la app de Spotify en español o inglés, y podría dejar de funcionar si Spotify cambia su interfaz.
 
 ## Cómo funciona
 
@@ -32,12 +32,15 @@ flowchart LR
 | «Jarvis, ¿cuánto consumo llevo?» | Dice el porcentaje de sesión y semanal | No |
 | «Jarvis, sube un poco el volumen», «… volumen al 40», «… silencia», «… activa el sonido» | Cambia el volumen de Windows | No |
 | «Jarvis, pon música», «… pausa», «… siguiente», «… canción anterior» | Controla la música con las teclas multimedia | No |
-| «Jarvis, pon música de Queen», «… pon The Killers en Spotify» | Abre la búsqueda en Spotify | No |
+| «Jarvis, pon música de Queen», «… pon The Killers en Spotify» | Busca en Spotify y reproduce el primer resultado | No |
+| «Jarvis, pon esa canción de los Killers que empieza con…» | Claude deduce cuál es y la reproduce | Sí |
 | «Jarvis, recuerda lo que hablamos el martes», «… la conversación sobre X» | Busca en vuestras conversaciones anteriores | Sí, solo lo que lee |
 | «Jarvis, para» | Corta lo que esté haciendo | No |
 | «Jarvis, apágate» | Da el resumen de consumo y se cierra | No |
 
-Tras cada respuesta puedes seguir hablando unos segundos sin repetir su nombre. Solo reacciona a «Jarvis» al principio o al final de la frase, y responde a cualquier voz, no solo a la tuya.
+Tras cada respuesta puedes seguir hablando unos segundos sin repetir su nombre. Reacciona a «Jarvis» al principio de la frase, incluso tras un «mira» o un «oye», y al final, y responde a cualquier voz, no solo a la tuya. Reconoce lo que suena parecido («Yarvis», «Jurais»), porque la transcripción no siempre acierta el nombre.
+
+**Peticiones largas:** cuanto más hablas, más pausa te permite antes de darte por terminado. Si aun así sigue en marcha cuando continúas, lo que digas en los 10 segundos siguientes se añade a la petición, sin repetir su nombre. Más tarde, otra orden con «Jarvis» queda en cola, y lo que digas sin llamarle se ignora.
 
 ## Instalación
 
@@ -97,11 +100,11 @@ Medida desde que dejas de hablar hasta que suena la respuesta, con voz simulada:
 
 | Tipo de orden | Tiempo |
 |---|---|
-| Respuestas sin Claude («¿estás ahí?») | unos 0,75 s |
-| Pregunta normal | unos 2,1 s |
+| Respuestas sin Claude («¿estás ahí?») | unos 1,2 s |
+| Pregunta normal | unos 2,5 s |
 | Tarea compleja | más, pero te cuenta el proceso mientras trabaja |
 
-Reparto aproximado de una pregunta normal: 0,45 s esperando a que termines de hablar, 0,3 s de transcripción en GPU (GTX 1650), de 0,5 a 0,7 s hasta las primeras palabras de Claude y 0,07 s de voz. Claude se mantiene en un proceso abierto para no pagar 2,3 s de arranque en cada orden.
+Reparto aproximado de una pregunta normal: 0,45 s o más esperando a que termines de hablar, 0,8 s de transcripción con el modelo `medium` en GPU (GTX 1650), de 0,5 a 0,7 s hasta las primeras palabras de Claude y 0,07 s de voz. Se usa `medium` y no `small`, que tarda 0,5 s menos, porque comete muchos menos errores. Claude se mantiene en un proceso abierto para no pagar 2,3 s de arranque en cada orden.
 
 Usa Claude Opus 5.5 (`MODELO_CLAUDE` en `jarvis.py`), el modelo más capaz, porque está pensado también para tareas complejas. En esas tareas dice qué va a hacer antes de cada paso y, si se queda callado 12 segundos, avisa de que sigue trabajando.
 

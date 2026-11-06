@@ -6,6 +6,7 @@ numpy==2.5.4
 piper-tts==1.8.0
 pycaw==20260927
 sounddevice==0.5.6
+uiautomation==2.0.29
 webrtcvad-wheels==2.0.14.post1
 
 # Solo para acelerar la transcripción con una gráfica NVIDIA. Sin ellas funciona con el procesador.
